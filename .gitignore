@@ -1,0 +1,12 @@
+# Sensible Umgebungsvariablen
+.env
+
+# Log-Dateien
+knx_app_debug.log
+knx_bus.log
+
+# Veraltete Dateien
+old/
+
+# Python Cache-Verzeichnis
+__pycache__/
