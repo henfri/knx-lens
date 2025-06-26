@@ -1,6 +1,10 @@
 # KNX Lens Suite
 
-This tool suite provides three powerful Python scripts for monitoring and analyzing KNX installations.
+Discover what's really happening on your KNX bus with KNX Lens!
+
+What sets KNX Lens apart from other solutions is its deep understanding of your project's structure. Instead of just filtering by Group or Physical Address, KNX Lens knows your ETS project file. This allows you to filter with context, for example, by selecting "Channel A" of a specific shutter to instantly analyze all its related communication objects. Browse your project the way you think: by building structure, functional group addresses, or physical topology.
+
+The suite consists of three tools:
 
 1.  **`knx-lens-logger.py`**: A robust logger that captures all KNX bus traffic, decodes telegrams using an ETS project file, and stores the data in rotating log files.
 
