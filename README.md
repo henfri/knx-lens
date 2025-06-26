@@ -11,6 +11,7 @@ This tool suite provides three powerful Python scripts for monitoring and analyz
 Together, these tools enable detailed live monitoring and convenient post-analysis of bus traffic—both in the terminal and in the browser.
 
 ![Demo of KNX Lens in action](demo.gif)
+![Demo of KNX Lens Web in action](demo-web.gif)
 
 ## Table of Contents
 

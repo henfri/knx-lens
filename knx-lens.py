@@ -263,7 +263,7 @@ class FilterInputScreen(ModalScreen[str]):
 
 ### --- TUI: HAUPTANWENDUNG ---
 class KNXExplorerApp(App):
-    CSS_PATH = "knx_tui_tool.css"
+    CSS_PATH = "knx-lens.css"
     BINDINGS = [
         Binding("q", "quit", "Beenden"),
         Binding("a", "toggle_selection", "Auswahl umschalten"),
