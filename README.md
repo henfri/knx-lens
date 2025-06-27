@@ -63,7 +63,7 @@ KNX-Lens is tested in Linux and Windows.
 
 ## Installation
 
-The tools require Python 3.8 or higher. Linux and Windows are tested
+The tools require Python 3.10 or higher. Linux and Windows are tested
 
 1.  **Clone or download the repository**:
     Ensure that you have the files `knx-lens-logger.py`, `knx-lens.py`, and `knx-lens-web.py` in one directory.
