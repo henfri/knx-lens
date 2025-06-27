@@ -10,3 +10,8 @@ old/
 
 # Python Cache-Verzeichnis
 __pycache__/
+
+# Ignoriere alle .log-Dateien
+*.log
+*.zip
+.env.bkup

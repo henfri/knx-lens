@@ -1,25 +1,8 @@
 
-#loading_label {
-    width: 100%;
-    height: 100%;
-    content-align: center middle;
-    padding: 1;
-}
-#filter_dialog {
-    width: 80%;
-    max-width: 70;
-    height: auto;
-    padding: 1 2;
-    background: $surface;
-    border: heavy $primary;
-}
-#filter_dialog > Label {
-    margin-bottom: 1;
-}
-#filter_input {
-    background: $boost;
-}
-#log_view {
-    border: round white;
-    padding: 1;
-}
+    #loading_label { width: 100%; height: 100%; content-align: center middle; padding: 1; }
+    #filter_dialog, #open_file_dialog { width: 80%; max-width: 70; height: auto; padding: 1 2; background: $surface; border: heavy $primary; }
+    #filter_dialog > Label, #open_file_dialog > Label { margin-bottom: 1; }
+    #filter_input, #path_input { background: $boost; }
+    #log_view { border: round white; padding: 1; }
+    #open_file_dialog > Horizontal { height: auto; align: center middle; margin-top: 1; }
+    
