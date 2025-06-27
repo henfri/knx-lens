@@ -5,6 +5,7 @@
 Ein interaktiver KNX Projekt-Explorer und Log-Filter.
 - Ermöglicht das Browsen des Projekts nach Gebäude-, Physikalischer und Gruppen-Struktur.
 - Filtert Log-Dateien (auch aus .zip-Archiven) basierend auf der Auswahl.
+- Zeigt den zuletzt empfangenen Payload und eine kurze Historie direkt im Baum an.
 - Shortcuts: (o) Log öffnen, (r) Log neu laden, (f) Filtern, (a) Auswahl, (t) Auto-Reload, (c) Kopieren, (q) Beenden.
 """
 import json
@@ -80,6 +81,7 @@ def get_best_channel_name(channel: Dict, ch_id: str) -> str:
     return channel.get("function_text") or channel.get("name") or f"Kanal-{ch_id}"
 
 def add_com_objects_to_node(parent_node: Dict, com_obj_ids: List[str], project_data: Dict):
+    """Fügt Communication Objects als Kinder zu einem Knoten hinzu und speichert den Originalnamen."""
     comm_objects = project_data.get("communication_objects", {})
     for co_id in com_obj_ids:
         co = comm_objects.get(co_id)
@@ -90,7 +92,8 @@ def add_com_objects_to_node(parent_node: Dict, com_obj_ids: List[str], project_d
             co_label = f"{co['number']}: {co_name} → [{gas_str}]"
             parent_node["children"][co_label] = {
                 "id": f"co_{co_id}", "name": co_label,
-                "data": {"type": "co", "gas": set(gas)}, "children": {}
+                "data": {"type": "co", "gas": set(gas), "original_name": co_label}, 
+                "children": {}
             }
 
 def build_ga_tree_data(project: Dict) -> TreeData:
@@ -166,14 +169,15 @@ def build_ga_tree_data(project: Dict) -> TreeData:
             sorted_addresses = sorted(sub_group.get("addresses", {}).items(), key=lambda item: [int(p) for p in item[0].split('/')])
             for addr_str, addr_details in sorted_addresses:
                 leaf_name = f"({addr_str}) {addr_details.get('name') or 'N/A'}"
-                sub_node["children"][addr_str] = {"id": f"ga_{addr_str}", "name": leaf_name, "data": {"type": "ga", "gas": {addr_str}}, "children": {}}
+                sub_node["children"][addr_str] = {
+                    "id": f"ga_{addr_str}", "name": leaf_name, 
+                    "data": {"type": "ga", "gas": {addr_str}, "original_name": leaf_name}, 
+                    "children": {}
+                }
     
     return root_node
 
 def build_pa_tree_data(project: Dict) -> TreeData:
-    """
-    Baut eine hierarchische Baumstruktur der Physikalischen Adressen.
-    """
     pa_tree = {"id": "pa_root", "name": "Physikalische Adressen", "children": {}}
     devices = project.get("devices", {})
     topology = project.get("topology", {})
@@ -196,20 +200,14 @@ def build_pa_tree_data(project: Dict) -> TreeData:
 
         area_name = area_names.get(area_id)
         area_label = f"({area_id}) {area_name}" if area_name and area_name != f"Bereich {area_id}" else f"Bereich {area_id}"
-        area_node = pa_tree["children"].setdefault(area_id, {
-            "id": f"pa_{area_id}", "name": area_label, "children": {}
-        })
+        area_node = pa_tree["children"].setdefault(area_id, {"id": f"pa_{area_id}", "name": area_label, "children": {}})
 
         line_name = line_names.get(line_id)
         line_label = f"({line_id}) {line_name}" if line_name and line_name != f"Linie {line_id}" else f"Linie {line_id}"
-        line_node = area_node["children"].setdefault(line_id_part, {
-            "id": f"pa_{line_id}", "name": line_label, "children": {}
-        })
+        line_node = area_node["children"].setdefault(line_id_part, {"id": f"pa_{line_id}", "name": line_label, "children": {}})
 
         device_name = f"({pa}) {device.get('name', 'N/A')}"
-        device_node = line_node["children"].setdefault(dev_id, {
-            "id": f"dev_{pa}", "name": device_name, "children": {}
-        })
+        device_node = line_node["children"].setdefault(dev_id, {"id": f"dev_{pa}", "name": device_name, "children": {}})
         
         processed_co_ids = set()
         for ch_id, channel in device.get("channels", {}).items():
@@ -304,7 +302,7 @@ class KNXExplorerApp(App):
         Binding("o", "open_log_file", "Log öffnen"),
         Binding("r", "reload_log_file", "Log neu laden"),
         Binding("t", "toggle_log_reload", "Auto-Reload Log"),
-        Binding("escape", "reset_filter", "Filter zurücksetzen", show=True),
+        Binding("escape", "reset_filter", "Auswahl zurücksetzen", show=True),
     ]
 
     def __init__(self, config: Dict):
@@ -317,6 +315,7 @@ class KNXExplorerApp(App):
         self.selected_gas: Set[str] = set()
         self.log_widget: Optional[RichLog] = None
         self.log_reload_timer: Optional[Timer] = None
+        self.payload_history: Dict[str, List[Dict[str, str]]] = {}
 
     def compose(self) -> ComposeResult:
         yield Header(name="KNX Projekt-Explorer")
@@ -385,12 +384,9 @@ class KNXExplorerApp(App):
         if data and "children" in data:
             add_nodes(tree.root, data["children"])
         
-        self._update_tree_visuals(tree.root)
+        self._update_tree_labels_recursively(tree.root)
         
-        # Den Baum standardmäßig komplett einklappen
         tree.root.collapse_all()
-
-        # Den Baum nur ausklappen, wenn explizit gefordert (z.B. nach einem Filter)
         if expand_all:
             tree.root.expand_all()
 
@@ -399,10 +395,8 @@ class KNXExplorerApp(App):
             line = line.strip()
             if not line or line.startswith("="): continue
             if ' | ' in line and len(line.split('|')) > 4 and re.search(r'\d+/\d+/\d+', line.split('|')[3]):
-                #self.notify("Log-Format erkannt: Pipe-getrennt")
                 return 'pipe_separated'
             if ';' in line:
-                #self.notify("Log-Format erkannt: CSV")
                 return 'csv'
         return None
 
@@ -445,6 +439,39 @@ class KNXExplorerApp(App):
         
         self.log_widget.write(f"\n[green]{found_count} passende Einträge gefunden.[/green]")
 
+    def _update_payload_history_from_log(self, lines: List[str]):
+        """
+        Parst die Log-Datei und aktualisiert das `self.payload_history` Dictionary.
+        """
+        self.payload_history.clear()
+        first_content_lines = [line for line in lines[:20] if line.strip() and not line.strip().startswith("=")]
+        log_format = self._detect_log_format(first_content_lines)
+        if not log_format:
+            return
+
+        for line in lines:
+            clean_line = line.strip()
+            if not clean_line: continue
+            try:
+                timestamp, ga, payload = None, None, None
+                if log_format == 'pipe_separated':
+                    parts = [p.strip() for p in clean_line.split('|')]
+                    if len(parts) > 5:
+                        timestamp, ga, payload = parts[0], parts[3], parts[5]
+                elif log_format == 'csv':
+                    row = next(csv.reader([clean_line], delimiter=';'))
+                    if len(row) > 6:
+                        timestamp, ga, payload = row[0], row[4], row[6]
+                if timestamp and ga and payload and re.match(r'\d+/\d+/\d+', ga):
+                    if ga not in self.payload_history:
+                        self.payload_history[ga] = []
+                    self.payload_history[ga].append({'timestamp': timestamp, 'payload': payload})
+            except (IndexError, StopIteration, csv.Error) as e:
+                logging.debug(f"Konnte Log-Zeile nicht parsen: '{clean_line}' - Fehler: {e}")
+                continue
+        
+        for ga in self.payload_history:
+            self.payload_history[ga].sort(key=lambda x: x['timestamp'])
 
     def _update_log_view(self):
         if not self.log_widget: return
@@ -455,10 +482,9 @@ class KNXExplorerApp(App):
         if not os.path.exists(log_file_path):
             log_widget.clear()
             log_widget.write(f"[red]FEHLER: Log-Datei nicht gefunden unter '{log_file_path}'[/red]")
-            log_widget.write("[dim]Mit 'o' eine andere Datei öffnen oder 'knx_logger.py' starten.[/dim]")
+            log_widget.write("[dim]Mit 'o' eine andere Datei öffnen.[/dim]")
             return
 
-        # Nur Header löschen, wenn Auto-Reload aktiv ist, um Flackern zu vermeiden
         if not self.log_reload_timer:
             log_widget.clear()
             log_widget.write(f"[bold]Lese Log:[/] {os.path.basename(log_file_path)}")
@@ -469,7 +495,7 @@ class KNXExplorerApp(App):
                 with zipfile.ZipFile(log_file_path, 'r') as zf:
                     log_files_in_zip = [name for name in zf.namelist() if name.lower().endswith('.log')]
                     if not log_files_in_zip:
-                        log_widget.write(f"\n[red]Keine .log-Datei im ZIP-Archiv '{os.path.basename(log_file_path)}' gefunden.[/red]")
+                        log_widget.write(f"\n[red]Keine .log-Datei im ZIP-Archiv gefunden.[/red]")
                         return
                     with zf.open(log_files_in_zip[0]) as log_file:
                         lines = io.TextIOWrapper(log_file, encoding='utf-8').readlines()
@@ -477,12 +503,14 @@ class KNXExplorerApp(App):
                 with open(log_file_path, 'r', encoding='utf-8') as f:
                     lines = f.readlines()
             
+            self._update_payload_history_from_log(lines)
+            for tree in self.query(Tree):
+                self._update_tree_labels_recursively(tree.root)
             self._process_log_lines(lines)
 
         except Exception as e:
-            log_widget.write(f"\n[red]Ein Fehler beim Verarbeiten der Log-Datei ist aufgetreten: {e}[/red]")
+            log_widget.write(f"\n[red]Fehler beim Verarbeiten der Log-Datei: {e}[/red]")
             log_widget.write(f"[dim]{traceback.format_exc()}[/dim]")
-
 
     def _get_descendant_gas(self, node: TreeNode) -> Set[str]:
         gas = set()
@@ -492,24 +520,61 @@ class KNXExplorerApp(App):
             gas.update(self._get_descendant_gas(child))
         return gas
 
-    def _update_tree_visuals(self, node: TreeNode) -> None:
-        all_descendant_gas = self._get_descendant_gas(node)
-        label_text = node.label.plain
-        # ENTFERNT alle vorhandenen Prefixes, um eine Neu-Ansammlung zu verhindern
-        label = re.sub(r"^(\[[ *\-]] )+", "", label_text)
+    def _update_tree_labels_recursively(self, node: TreeNode) -> None:
+        """
+        KORRIGIERT & ZENTRALISIERT: Baut das Label eines Knotens von Grund auf neu.
+        Verhindert die Akkumulation von Präfixen auf höheren Ebenen.
+        """
+        # --- Schritt 1: Den reinen Textinhalt des Labels bestimmen ---
+        display_label = ""
+        # Für Knoten mit Daten (Blätter mit GAs)
+        if node.data and "original_name" in node.data:
+            original_name = node.data["original_name"]
+            display_label = original_name  # Beginne mit dem sauberen Namen
+            
+            # Füge Payload-Informationen hinzu, falls vorhanden
+            node_gas = node.data.get("gas", set())
+            if node_gas:
+                combined_history = []
+                for ga in node_gas:
+                    if ga in self.payload_history:
+                        combined_history.extend(self.payload_history[ga])
+                
+                if combined_history:
+                    combined_history.sort(key=lambda x: x['timestamp'])
+                    latest_payloads = [item['payload'] for item in combined_history[-3:]]
+                    current_payload = latest_payloads[-1]
+                    previous_payloads = latest_payloads[-2::-1]
+                    
+                    payload_str = f"[bold yellow]{current_payload}[/]"
+                    if previous_payloads:
+                        history_str = ", ".join(previous_payloads)
+                        payload_str += f" [dim]({history_str})[/dim]"
+                    
+                    display_label = f"{original_name} -> {payload_str}"
+        # Für Knoten ohne Daten (Elternknoten)
+        else:
+            # Entscheidender Fix: Nimm den aktuellen Text und entferne IMMER alle alten Präfixe.
+            display_label = re.sub(r"^(\[[ *\-]] )+", "", node.label.plain)
 
+        # --- Schritt 2: Den Auswahl-Präfix bestimmen ---
+        prefix = ""
+        all_descendant_gas = self._get_descendant_gas(node)
         if all_descendant_gas:
             selected_descendant_gas = self.selected_gas.intersection(all_descendant_gas)
-            if not selected_descendant_gas: prefix = "[ ] "
-            elif len(selected_descendant_gas) == len(all_descendant_gas): prefix = "[*] "
-            else: prefix = "[-] "
-            node.set_label(prefix + label)
-        else:
-            # Stellt sicher, dass auch bei Knoten ohne GAs alte Prefixes entfernt werden
-            node.set_label(label)
+            if not selected_descendant_gas: 
+                prefix = "[ ] "
+            elif len(selected_descendant_gas) == len(all_descendant_gas): 
+                prefix = "[*] "
+            else: 
+                prefix = "[-] "
 
+        # --- Schritt 3: Endgültiges Label aus Präfix und Inhalt zusammensetzen ---
+        node.set_label(prefix + display_label)
+
+        # --- Schritt 4: Rekursion für alle Kinder ---
         for child in node.children:
-            self._update_tree_visuals(child)
+            self._update_tree_labels_recursively(child)
 
     def action_toggle_selection(self) -> None:
         try:
@@ -524,31 +589,31 @@ class KNXExplorerApp(App):
             else:
                 self.selected_gas.update(descendant_gas)
             
-            # Visuelle Darstellung für alle Bäume aktualisieren
             for tree in self.query(Tree):
-                self._update_tree_visuals(tree.root)
+                self._update_tree_labels_recursively(tree.root)
             
-            # Log-Ansicht mit der neuen Auswahl aktualisieren
-            self._update_log_view()
+            if self.query_one(TabbedContent).active == "log_pane":
+                self.action_reload_log_file()
+
         except Exception as e:
             logging.error(f"Fehler bei action_toggle_selection: {e}", exc_info=True)
 
-
     def action_copy_label(self) -> None:
-        """Kopiert die Bezeichnung des aktuellen Knotens in die Zwischenablage."""
+        """Kopiert die saubere Bezeichnung des Knotens (ohne Präfix/Payload) in die Zwischenablage."""
         try:
             active_tree = self.query_one(TabbedContent).active_pane.query_one(Tree)
             node = active_tree.cursor_node
-            if node and node.label:
-                # Entfernt den Status-Präfix (z.B., "[*] ") von der Bezeichnung
-                label_text = node.label.plain
-                clean_label = re.sub(r"^(\[[ *\-]] )+", "", label_text)
-                self.notify(f"Kopiert: '{clean_label}'")
+            if node and node.data and "original_name" in node.data:
+                self.notify(f"Kopiert: '{node.data['original_name']}'")
+            elif node:
+                 label_text = node.label.plain
+                 clean_label = re.sub(r"^(\[[ *\-]] )+", "", label_text)
+                 clean_label = re.sub(r"\s*->\s*.*$", "", clean_label)
+                 self.notify(f"Kopiert: '{clean_label}'")
         except Exception:
             self.notify("Konnte nichts kopieren.", severity="error")
 
     def action_open_log_file(self) -> None:
-        """Öffnet den Dialog zum Auswählen einer neuen Log-Datei."""
         def handle_open_result(result: Tuple[str, bool]):
             path, should_save = result
             if not path:
@@ -563,25 +628,18 @@ class KNXExplorerApp(App):
             self.notify(f"Log-Datei geöffnet: {os.path.basename(path)}")
 
             if should_save:
-                dotenv_path = find_dotenv()
-                if not dotenv_path: 
-                    Path(".env").touch()
-                    dotenv_path = find_dotenv()
-                
-                set_key(dotenv_path, "LOG_FILE", path)
+                dotenv_path = find_dotenv() or Path(".env")
+                if not os.path.exists(dotenv_path): Path(dotenv_path).touch()
+                set_key(str(dotenv_path), "LOG_FILE", path, quote_mode="never")
                 self.notify("Pfad als neuen Standard gespeichert.", severity="information")
 
             self._update_log_view()
-
         self.push_screen(OpenFileScreen(), handle_open_result)
 
     def action_reload_log_file(self) -> None:
-        """Lädt die aktuelle Log-Datei neu."""
-        # Keine Benachrichtigung hier, um Spam bei Auto-Reload zu vermeiden
         self._update_log_view()
     
     def action_toggle_log_reload(self) -> None:
-        """Schaltet das automatische Neuladen der Log-Datei um."""
         if self.log_reload_timer:
             self.log_reload_timer.stop()
             self.log_reload_timer = None
@@ -590,27 +648,14 @@ class KNXExplorerApp(App):
             self.log_reload_timer = self.set_interval(1, self.action_reload_log_file)
             self.notify("Log Auto-Reload [bold green]EIN[/].", title="Log Ansicht")
 
-    # ----------------------------------------------------------------
-    # --- FINALE FILTER-LOGIK (Korrigierte Version) ---
-    # ----------------------------------------------------------------
-    
     def _filter_tree_data(self, original_data: TreeData, filter_text: str) -> Tuple[Optional[TreeData], bool]:
-        """
-        Filtert rekursiv die Quelldaten. Wenn ein Knoten passt, wird sein ganzer Teilbaum übernommen.
-        Wenn nicht, wird bei den Kindern weitergesucht.
-        """
-        if not original_data:
-            return None, False
+        if not original_data: return None, False
+        # Beim Filtern auch den Originalnamen berücksichtigen, falls vorhanden
+        node_name_to_check = original_data.get("data", {}).get("original_name") or original_data.get("name", "")
+        is_direct_match = filter_text in node_name_to_check.lower()
 
-        node_name = original_data.get("name", "")
-        # Prüfen, ob der aktuelle Knoten ein direkter Treffer ist.
-        is_direct_match = filter_text in node_name.lower()
+        if is_direct_match: return original_data.copy(), True
 
-        # Wenn der Knoten selbst ein Treffer ist, nehmen wir ihn und alle seine Kinder.
-        if is_direct_match:
-            return original_data.copy(), True
-
-        # Wenn kein direkter Treffer, prüfen wir die Kinder rekursiv.
         if original_children := original_data.get("children"):
             filtered_children = {}
             has_matching_descendant = False
@@ -620,43 +665,33 @@ class KNXExplorerApp(App):
                     has_matching_descendant = True
                     filtered_children[key] = filtered_child_data
             
-            # Wenn ein Kind (oder dessen Kind) ein Treffer war, bauen wir diesen Knoten
-            # mit der gefilterten Liste der Kinder wieder auf.
             if has_matching_descendant:
                 new_node_data = original_data.copy()
                 new_node_data["children"] = filtered_children
                 return new_node_data, True
-
-        # Weder der Knoten selbst noch eines seiner Kinder waren ein Treffer.
         return None, False
 
     def action_reset_filter(self) -> None:
-        """Setzt den Filter zurück, indem der Baum mit den Originaldaten neu aufgebaut wird."""
         try:
             tabs = self.query_one(TabbedContent)
             active_pane = tabs.active_pane
             tree = active_pane.query_one(Tree)
             
             original_data = None
-            if tabs.active == "building_pane":
-                original_data = self.building_tree_data
-            elif tabs.active == "pa_pane":
-                original_data = self.pa_tree_data
-            elif tabs.active == "ga_pane":
-                original_data = self.ga_tree_data
+            if tabs.active == "building_pane": original_data = self.building_tree_data
+            elif tabs.active == "pa_pane": original_data = self.pa_tree_data
+            elif tabs.active == "ga_pane": original_data = self.ga_tree_data
             
             if original_data:
                 self._populate_tree_from_data(tree, original_data)
                 self.notify("Filter zurückgesetzt.")
             else:
                 self.notify("Konnte Originaldaten für Reset nicht finden.", severity="warning")
-
         except Exception as e:
             logging.error(f"Fehler beim Zurücksetzen des Filters: {e}", exc_info=True)
             self.notify("Kein aktiver Baum zum Zurücksetzen gefunden.", severity="error")
 
     def action_filter_tree(self) -> None:
-        """Öffnet einen Dialog und filtert den Baum durch Leeren und Neuaufbauen."""
         try:
             tabs = self.query_one(TabbedContent)
             active_pane = tabs.active_pane
@@ -666,7 +701,6 @@ class KNXExplorerApp(App):
             return
 
         def filter_callback(filter_text: str):
-            # Wenn der Filtertext leer ist, den Filter zurücksetzen.
             if not filter_text:
                 self.action_reset_filter()
                 return
@@ -674,41 +708,30 @@ class KNXExplorerApp(App):
             lower_filter_text = filter_text.lower()
             self.notify(f"Filtere Baum mit: '{filter_text}'...")
 
-            # Die passenden Originaldaten für den aktiven Tab auswählen.
             original_data = None
-            if tabs.active == "building_pane":
-                original_data = self.building_tree_data
-            elif tabs.active == "pa_pane":
-                original_data = self.pa_tree_data
-            elif tabs.active == "ga_pane":
-                original_data = self.ga_tree_data
+            if tabs.active == "building_pane": original_data = self.building_tree_data
+            elif tabs.active == "pa_pane": original_data = self.pa_tree_data
+            elif tabs.active == "ga_pane": original_data = self.ga_tree_data
             
             if not original_data:
                 self.notify("Keine Daten zum Filtern für diesen Tab gefunden.", severity="error")
                 return
 
-            # Die Datenstruktur filtern.
             filtered_data, has_matches = self._filter_tree_data(original_data, lower_filter_text)
             
             if not has_matches:
                 self.notify(f"Keine Treffer für '{filter_text}' gefunden.")
             
-            # Den Baum mit den gefilterten Daten neu aufbauen und komplett aufklappen.
             self._populate_tree_from_data(tree, filtered_data or {}, expand_all=True)
 
         self.push_screen(FilterInputScreen(), filter_callback)
 
-
 ### --- START ---
 def main():
     try:
-        # --- Logging Konfiguration ---
         logging.basicConfig(
-            level=logging.INFO,
-            filename='knx_lens.log',
-            filemode='w',
-            format='%(asctime)s - %(levelname)s - %(message)s',
-            encoding='utf-8'
+            level=logging.INFO, filename='knx_lens.log', filemode='w',
+            format='%(asctime)s - %(levelname)s - %(message)s', encoding='utf-8'
         )
         logging.info("Anwendung gestartet.")
 
@@ -720,8 +743,7 @@ def main():
         #log_view { border: round white; padding: 1; }
         #open_file_dialog > Horizontal { height: auto; align: center middle; margin-top: 1; }
         """
-        with open("knx-lens.css", "w") as f:
-            f.write(css_content)
+        with open("knx-lens.css", "w") as f: f.write(css_content)
 
         load_dotenv()
         parser = argparse.ArgumentParser(description="KNX Projekt-Explorer und Log-Filter.")
@@ -749,7 +771,6 @@ def main():
         logging.critical("Unbehandelter Fehler in der main() Funktion", exc_info=True)
         traceback.print_exc(file=sys.stderr)
         sys.exit(1)
-
 
 if __name__ == "__main__":
     main()

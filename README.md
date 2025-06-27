@@ -54,6 +54,8 @@ KNX-Lens is tested in Linux and Windows.
 * **Intelligent Log Filtering**: Select individual devices, rooms, or functions in the explorer to specifically filter the logs created by `knx-lens-logger.py`.
 * **Efficient Caching**: Parsing of the `.knxproj` file is cached to significantly speed up subsequent launches.
 * **Live Search/Filter**: Filter the tree views in real-time to quickly find what you're looking for.
+* **Live Values in Tree**: Latest and previous two values are displayed in tree
+
 
 ### `knx-lens-web.py`
 
@@ -156,12 +158,19 @@ python knx-lens.py
 ```
 **Explorer Controls:**
 
-* **Switch Tabs**: Use the arrow keys (left/right).
-* **Navigate**: Arrow keys (up/down/left/right).
-* **`a`**: Toggles the selection for the log filter.
-* **`f`**: Filters the current tree view (i.e. only Nodes with your search term are displayed, the others hidden. This does not affect the log, only the tree-view)
-* **`Escape`**: Resets the tree filter.
-* **`q`**: Quits the application.
+| Taste         | Aktion                   | Beschreibung                                                                     |
+|---------------|--------------------------|----------------------------------------------------------------------------------|
+| `↑` / `↓`     | Navigieren               | Bewegt den Cursor im Baum nach oben oder unten.                                  |
+| `Enter`       | Auf-/Zuklappen           | Klappt den ausgewählten Knoten im Baum auf oder zu.                              |
+| `Tab`         | Ansicht wechseln         | Wechselt zwischen den Tabs (Gebäude, Linien, Funktionen, Log).                   |
+| `a`           | Auswahl umschalten       | Wählt den aktuellen Knoten und alle untergeordneten Elemente für den Log-Filter aus (oder ab). |
+| `c`           | Kopieren                 | Kopiert die saubere Bezeichnung des aktuellen Knotens in die Zwischenablage.     |
+| `f`           | Baum filtern             | Öffnet ein Eingabefeld, um die aktuelle Baumansicht zu filtern.                    |
+| `o`           | Log-Datei öffnen         | Öffnet einen Dialog, um eine neue Log-Datei zu laden.                            |
+| `r`           | Log neu laden            | Lädt die aktuelle Log-Datei manuell neu, um Änderungen anzuzeigen.               |
+| `t`           | Auto-Reload umschalten   | Schaltet das automatische Neuladen der Log-Datei ein oder aus.                   |
+| `Escape`      | Filter zurücksetzen      | Entfernt den aktuellen Filter und zeigt den vollständigen Baum wieder an.          |
+| `q`           | Beenden                  | Schließt die Anwendung.                                                          |
 
 ### Step 3: Explore Logs and Project in the Web Browser
 
