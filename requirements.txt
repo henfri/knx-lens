@@ -1,0 +1,5 @@
+    python-dotenv
+    textual
+    xknx
+    xknxproject
+    textual-serve
