@@ -46,7 +46,7 @@ KNX-Lens is tested in Linux and Windows.
 
 ### `knx-lens.py`
 
-* **Interactive TUI**: A user-friendly command-line interface that can be operated without a mouse.
+* **Interactive TUI**: A user-friendly command-line interface that can be operated with or without a mouse.
 * **Multiple Views**: Browse your KNX project by:
     * **Building Structure** (e.g., Floor -> Room -> Device)
     * **Physical Addresses** (Line structure)
