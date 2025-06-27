@@ -158,19 +158,20 @@ python knx-lens.py
 ```
 **Explorer Controls:**
 
-| Taste         | Aktion                   | Beschreibung                                                                     |
-|---------------|--------------------------|----------------------------------------------------------------------------------|
-| `↑` / `↓`     | Navigieren               | Bewegt den Cursor im Baum nach oben oder unten.                                  |
-| `Enter`       | Auf-/Zuklappen           | Klappt den ausgewählten Knoten im Baum auf oder zu.                              |
-| `Tab`         | Ansicht wechseln         | Wechselt zwischen den Tabs (Gebäude, Linien, Funktionen, Log).                   |
-| `a`           | Auswahl umschalten       | Wählt den aktuellen Knoten und alle untergeordneten Elemente für den Log-Filter aus (oder ab). |
-| `c`           | Kopieren                 | Kopiert die saubere Bezeichnung des aktuellen Knotens in die Zwischenablage.     |
-| `f`           | Baum filtern             | Öffnet ein Eingabefeld, um die aktuelle Baumansicht zu filtern.                    |
-| `o`           | Log-Datei öffnen         | Öffnet einen Dialog, um eine neue Log-Datei zu laden.                            |
-| `r`           | Log neu laden            | Lädt die aktuelle Log-Datei manuell neu, um Änderungen anzuzeigen.               |
-| `t`           | Auto-Reload umschalten   | Schaltet das automatische Neuladen der Log-Datei ein oder aus.                   |
-| `Escape`      | Filter zurücksetzen      | Entfernt den aktuellen Filter und zeigt den vollständigen Baum wieder an.          |
-| `q`           | Beenden                  | Schließt die Anwendung.                                                          |
+| Key      | Action             | Description                                                                  |
+|----------|--------------------|------------------------------------------------------------------------------|
+| ↑ / ↓    | Navigate           | Moves the cursor up or down in the tree.                                     |
+| Enter    | Expand/Collapse    | Expands or collapses the selected node in the tree.                          |
+| Tab      | Switch view        | Switches between the tabs (Building, Lines, Functions, Log).                 |
+| a        | Toggle selection   | Selects (or deselects) the current node and all its children for the log filter. |
+| c        | Copy               | Copies the clean name of the current node to the clipboard.                  |
+| d        | Display Mode       | Toggles the display mode of received data.                                   |
+| f        | Filter tree        | Opens an input field to filter the current tree view.                        |
+| o        | Open log file      | Opens a dialog to load a new log file.                                       |
+| r        | Reload log         | Manually reloads the current log file to show changes.                       |
+| t        | Toggle auto-reload | Toggles the automatic reloading of the log file on or off.                   |
+| Escape   | Reset filter       | Removes the current filter and shows the full tree again.                    |
+| q        | Quit               | Closes the application.                                                      |
 
 ### Step 3: Explore Logs and Project in the Web Browser
 
