@@ -17,6 +17,8 @@ Together, these tools enable detailed live monitoring and convenient post-analys
 ![Demo of KNX Lens in action](demo.gif)
 ![Demo of KNX Lens Web in action](demo-web.gif)
 
+KNX-Lens is tested in Linux and Windows.
+
 ## Table of Contents
 
 * [Features](#features)
@@ -38,7 +40,7 @@ Together, these tools enable detailed live monitoring and convenient post-analys
 * **Interactive Setup**: Guides the user through the configuration of the gateway and the log directory.
 * **Automatic Gateway Detection**: Finds KNX/IP gateways on the local network.
 * **Telegram Decoding**: Uses a `.knxproj` file to interpret group addresses, device names, and datapoint types (DPTs) to create human-readable logs.
-* **Rotating Logs**: Creates daily log files (`knx_bus.log`) and automatically compresses older logs with gzip to save space.
+* **Rotating Logs**: Creates daily log files (`knx_bus.log`) and automatically compresses older logs with gzip to save space. Currently, 30 days are kept.
 * **Daemon Mode**: Can run as a background service for continuous logging.
 * **Debugging**: Writes all internal actions and errors to a separate `knx_app_debug.log`.
 
@@ -56,33 +58,25 @@ Together, these tools enable detailed live monitoring and convenient post-analys
 ### `knx-lens-web.py`
 
 * **Web Access**: Makes the full functionality of `knx-lens.py` available via a web interface.
-* **Multi-User Capable**: Multiple users can access the explorer simultaneously through the browser.
+* **Multi-User Capable**: Multiple users can access the explorer simultaneously through the browser
 * **Simple Start**: A single script starts the server and makes the application available on the local network.
 
 ## Installation
 
-The tools require Python 3.8 or higher.
+The tools require Python 3.8 or higher. Linux and Windows are tested
 
 1.  **Clone or download the repository**:
     Ensure that you have the files `knx-lens-logger.py`, `knx-lens.py`, and `knx-lens-web.py` in one directory.
 
-2.  **Create a Virtual Environment (Recommended)**:
+2.  **Create a Virtual Environment (Recommended, but not mandatory)**:
     ```bash
     python -m venv .venv
     source .venv/bin/activate  # On Windows: .venv\Scripts\activate
     ```
 
 3.  **Install Dependencies**:
-    Create a file named `requirements.txt` with the following content:
+    Install dependencies using pip:
     ```
-    python-dotenv
-    textual
-    xknx
-    xknxproject
-    textual-serve
-    ```
-    Then, install them using pip:
-    ```bash
     pip install -r requirements.txt
     ```
 
@@ -165,7 +159,7 @@ python knx-lens.py
 * **Switch Tabs**: Use the arrow keys (left/right).
 * **Navigate**: Arrow keys (up/down/left/right).
 * **`a`**: Toggles the selection for the log filter.
-* **`f`**: Filters the current tree view.
+* **`f`**: Filters the current tree view (i.e. only Nodes with your search term are displayed, the others hidden. This does not affect the log, only the tree-view)
 * **`Escape`**: Resets the tree filter.
 * **`q`**: Quits the application.
 
@@ -177,24 +171,11 @@ As an alternative to the terminal, you can also start the explorer via the web i
     ```bash
     python knx-lens-web.py
     ```
-2.  **Open your browser** and go to the displayed address (usually `http://127.0.0.1:8080`). The operation in the browser is identical to that in the terminal.
-
-3.  **(Optional) Making the web interface accessible on your local network:**
-    By default, the web interface is only accessible on the computer it's running on. To make it accessible to other devices in your network, you need to edit `knx-lens-web.py`.
-    Change the `server.serve()` call to bind to all network interfaces:
-    
-    *From:*
-    ```python
-    server.serve()
-    ```
-    *To:*
-    ```python
-    server.serve(host="0.0.0.0")
-    ```
-    After restarting `knx-lens-web.py`, you can access the interface using the IP address of the host machine (e.g., `http://192.168.1.100:8080`).
+2.  **Open your browser** and go to the displayed address (usually `http://127.0.0.1:8080`). The operation in the browser is identical to that in the terminal. Currently, only possible on the local machine; Remote access planned for future version
 
 
-### Step 4: Running the Logger as a Systemd Service (Linux)
+
+### Step 4: Running the Logger as a Systemd Service (Linux, optional)
 
 To automatically start the `knx-lens-logger.py` on a modern Debian-based system (like Raspberry Pi OS, Ubuntu, etc.), you can use `systemd`.
 
