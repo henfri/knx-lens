@@ -24,7 +24,7 @@ KNX-Lens is tested in Linux and Windows.
 * [Features](#features)
 * [Installation](#installation)
 * [Configuration](#configuration)
-    * [1. `knx-lens-logger.py` Setup (First Time)](#1-knx-lens-loggerpy-setup-first-time)
+    * [1. Setup (First Time)](#1-knx-lens-setup-first-time)
     * [2. Manually Edit the `.env` File](#2-manually-edit-the-env-file)
 * [Usage](#usage)
     * [Step 1: Log Bus Traffic](#step-1-log-bus-traffic)
@@ -84,11 +84,11 @@ The tools require Python 3.8 or higher. Linux and Windows are tested
 
 The configuration is stored centrally in a `.env` file in the same directory.
 
-### 1. `knx-lens-logger.py` Setup (First Time)
+### 1. `knx-lens.py` Setup (First Time)
 
 The easiest way to configure the tools is by using the logger's interactive setup. Run it once:
 ```bash
-python knx-lens-logger.py --setup
+python setup.py
 ```
 The script will guide you through the following steps:
 
