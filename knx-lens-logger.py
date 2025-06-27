@@ -55,7 +55,7 @@ class ZipTimedRotatingFileHandler(TimedRotatingFileHandler):
             logging.exception("Fehler bei der Log-Rotation zu ZIP")
 
 
-def setup_knx_bus_logger(log_path: str) -> logging.Logger:
+def setup_knx_bus_logger(log_path: str, is_daemon_mode: bool) -> logging.Logger:
     """Konfiguriert den Logger für den reinen KNX-Busverkehr."""
     log_dir = Path(log_path)
     log_dir.mkdir(parents=True, exist_ok=True)
@@ -69,16 +69,24 @@ def setup_knx_bus_logger(log_path: str) -> logging.Logger:
         bus_logger.handlers.clear()
 
     formatter = logging.Formatter('%(message)s')
-    # Use the new ZipTimedRotatingFileHandler
-    handler = ZipTimedRotatingFileHandler(
+    
+    # 1. Handler: Loggt immer in die rotierende Datei
+    file_handler = ZipTimedRotatingFileHandler(
         log_file,
         when="midnight",
         interval=1,
         backupCount=30,  # Keep 30 days of logs
         encoding='utf-8'
     )
-    handler.setFormatter(formatter)
-    bus_logger.addHandler(handler)
+    file_handler.setFormatter(formatter)
+    bus_logger.addHandler(file_handler)
+
+    # 2. Handler: Loggt NUR auf die Konsole, wenn nicht im Daemon-Modus
+    if not is_daemon_mode:
+        console_handler = logging.StreamHandler(sys.stdout)
+        console_handler.setFormatter(formatter)
+        bus_logger.addHandler(console_handler)
+        
     return bus_logger
 
 
@@ -106,30 +114,38 @@ def telegram_to_log_message(telegram: Telegram, knx_project: Optional[KNXProject
             ia_name = device.get('name', '')
         if (ga_data := knx_project["group_addresses"].get(ga_string)) is not None:
             ga_name = ga_data.get('name', '')
-        if (data := telegram.decoded_data) is not None and 'value' in data:
-            unit = data.get('unit', '')
-            data_str = f"{data['value']} {unit}".strip()
+        
+        if (data := telegram.decoded_data) is not None:
+            # Prüfen, ob das 'unit'-Attribut existiert, um AttributeError zu vermeiden
+            if hasattr(data, 'unit') and data.unit is not None:
+                data_str = f"{data.value} {data.unit}".strip()
+            else:
+                data_str = str(data.value)
         else:
-            data_str = str(payload) # Fallback, if no decoded value
+            # Fallback, wenn keine dekodierten Daten vorhanden sind
+            data_str = str(payload)
+            
     else:
         # Ohne Projektdatei nur die Rohdaten verwenden
         data_str = str(payload)
+        
+    # ANGEPASSTE SPALTENBREITEN ZUR VERMEIDUNG VON ZEILENUMBRÜCHEN
     col_widths = {
-        "timestamp": 26, # z.B. für "2025-06-27 10:15:18.123456"
+        "timestamp": 26,
         "ia_string": 9,
-        "ia_name": 30,
+        "ia_name": 25,  # Gekürzt von 30
         "ga_string": 8,
-        "ga_name": 34,
-        "data": 50      # Annahme für die Daten-Spalte
+        "ga_name": 30,  # Gekürzt von 34
+        "data": 25      # Gekürzt von 50
     }
     # Erzeugt eine saubere, mit Pipe getrennte Zeile
     line = (
-    f"{timestamp:<{col_widths['timestamp']}} | "
-    f"{ia_string[:col_widths['ia_string']]:<{col_widths['ia_string']}} | "
-    f"{ia_name[:col_widths['ia_name']]:<{col_widths['ia_name']}} | "
-    f"{ga_string[:col_widths['ga_string']]:<{col_widths['ga_string']}} | "
-    f"{ga_name[:col_widths['ga_name']]:<{col_widths['ga_name']}} | "
-    f"{data_str[:col_widths['data']]:<{col_widths['data']}}"
+        f"{timestamp:<{col_widths['timestamp']}} | "
+        f"{ia_string[:col_widths['ia_string']]:<{col_widths['ia_string']}} | "
+        f"{ia_name[:col_widths['ia_name']]:<{col_widths['ia_name']}} | "
+        f"{ga_string[:col_widths['ga_string']]:<{col_widths['ga_string']}} | "
+        f"{ga_name[:col_widths['ga_name']]:<{col_widths['ga_name']}} | "
+        f"{data_str[:col_widths['data']]:<{col_widths['data']}}"
     )
     return line
 
@@ -160,12 +176,10 @@ def load_project(file_path: str, password: Optional[str]) -> Optional[KNXProject
         return None
 
 
-def telegram_received_cb(telegram: Telegram, knx_project: Optional[KNXProject], logger: logging.Logger, is_daemon_mode: bool):
+def telegram_received_cb(telegram: Telegram, knx_project: Optional[KNXProject], logger: logging.Logger):
     """Callback, der bei jedem Telegramm aufgerufen wird."""
     log_message = telegram_to_log_message(telegram, knx_project)
     logger.info(log_message)
-    if not is_daemon_mode:
-        print(log_message)
 
 async def start_logger_mode():
     """Stellt eine Verbindung zum KNX-Bus her und loggt alle Telegramme."""
@@ -178,7 +192,8 @@ async def start_logger_mode():
     ets_project_file = os.getenv("KNX_PROJECT_PATH")
     ets_password = os.getenv("KNX_PASSWORD")
 
-    bus_logger = setup_knx_bus_logger(log_path)
+    # Logger wird jetzt mit dem Daemon-Status initialisiert
+    bus_logger = setup_knx_bus_logger(log_path, is_daemon_mode)
 
     if not is_daemon_mode:
         print("\n" + "=" * 50)
@@ -222,9 +237,18 @@ async def start_logger_mode():
     
     if knx_project:
         xknx.knxproj = knx_project
-
+        
+    if knx_project is not None:
+        dpt_dict = {
+            ga: data["dpt"]
+            for ga, data in knx_project["group_addresses"].items()
+            if data["dpt"] is not None
+        }
+        xknx.group_address_dpt.set(dpt_dict)
+    
+    # Callback-Registrierung vereinfacht, da is_daemon_mode nicht mehr benötigt wird
     xknx.telegram_queue.register_telegram_received_cb(
-        lambda t: telegram_received_cb(t, knx_project, bus_logger, is_daemon_mode)
+        lambda t: telegram_received_cb(t, knx_project, bus_logger)
     )
 
     if not is_daemon_mode:
