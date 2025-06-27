@@ -17,6 +17,8 @@ import traceback
 import re
 import zipfile
 import io
+import logging
+from pathlib import Path
 from typing import Dict, List, Any, Optional, Set, Tuple
 
 # Third-party libraries
@@ -27,6 +29,7 @@ from textual.containers import Vertical, Center, Horizontal
 from textual.screen import ModalScreen
 from textual.widgets import Header, Footer, Tree, Static, Input, TabbedContent, TabPane, RichLog, Label, Button
 from textual.widgets.tree import TreeNode
+from textual import events
 from xknxproject import XKNXProj
 
 ### --- SETUP & KONSTANTEN ---
@@ -55,24 +58,23 @@ def load_or_parse_project(knxproj_path: str, password: Optional[str]) -> Dict:
                 cache_data = json.load(f)
                 current_md5 = get_md5_hash(knxproj_path)
                 if cache_data.get("md5") == current_md5:
-                    print("Cache ist aktuell. Lade aus dem Cache...")
+                    logging.info("Cache ist aktuell. Lade aus dem Cache...")
                     return cache_data["project"]
             except (json.JSONDecodeError, KeyError):
-                print("Cache ist korrupt. Parse Projekt neu...")
+                logging.warning("Cache ist korrupt. Parse Projekt neu...")
     
-    print(f"Parse KNX-Projektdatei: {knxproj_path} (dies kann einen Moment dauern)...")
+    logging.info(f"Parse KNX-Projektdatei: {knxproj_path} (dies kann einen Moment dauern)...")
     xknxproj = XKNXProj(knxproj_path, password=password)
     project_data = xknxproj.parse()
 
     current_md5 = get_md5_hash(knxproj_path)
     new_cache_data = {"md5": current_md5, "project": project_data}
-    print(f"Speichere neuen Cache nach {cache_path}")
+    logging.info(f"Speichere neuen Cache nach {cache_path}")
     with open(cache_path, 'w', encoding='utf-8') as f:
         json.dump(new_cache_data, f, indent=2)
     
     return project_data
 
-# ... (build_ga_tree_data, build_pa_tree_data, etc. bleiben größtenteils gleich)
 def get_best_channel_name(channel: Dict, ch_id: str) -> str:
     return channel.get("function_text") or channel.get("name") or f"Kanal-{ch_id}"
 
@@ -91,71 +93,143 @@ def add_com_objects_to_node(parent_node: Dict, com_obj_ids: List[str], project_d
             }
 
 def build_ga_tree_data(project: Dict) -> TreeData:
-    root_node: TreeData = {"id": "ga_root", "name": "Gruppenadressen", "children": {}}
-    group_ranges = project.get("group_ranges", {})
+    """
+    Baut eine hierarchische Baumstruktur von Gruppenadressen aus einem KNX-Projekt.
+    Diese Version wurde korrigiert, um verschachtelte 'group_ranges' korrekt zu verarbeiten.
+    """
     group_addresses = project.get("group_addresses", {})
-    hierarchy = {}
-    for key, value in group_ranges.items():
-        parts = key.split('/')
-        name = value.get("name", f"Bereich {key}")
-        if len(parts) == 1:
-            if key not in hierarchy: hierarchy[key] = {"name": name, "subgroups": {}}
-            else: hierarchy[key]["name"] = name
-        elif len(parts) == 2:
+    group_ranges = project.get("group_ranges", {})
+    root_node: TreeData = {"id": "ga_root", "name": "Funktionen", "children": {}}
+    
+    if not group_addresses:
+        return root_node
+        
+    hierarchy: TreeData = {}
+
+    # Pass 1: Erstellt die Hierarchiestruktur aus allen 3-stufigen Adressen
+    for address in group_addresses.keys():
+        parts = address.split('/')
+        if len(parts) == 3:
+            main_key, sub_key_part, _ = parts
+            sub_key = f"{main_key}/{sub_key_part}"
+            if main_key not in hierarchy:
+                hierarchy[main_key] = {"name": "", "subgroups": {}}
+            if sub_key not in hierarchy[main_key]["subgroups"]:
+                hierarchy[main_key]["subgroups"][sub_key] = {"name": "", "addresses": {}}
+            hierarchy[main_key]["subgroups"][sub_key]["addresses"][address] = {"name": ""}
+
+    # Wandelt die verschachtelte group_ranges-Struktur in ein flaches Dictionary um
+    flat_group_ranges = {}
+    def flatten_ranges(ranges_to_flatten: Dict):
+        for addr, details in ranges_to_flatten.items():
+            details_copy = details.copy()
+            nested_ranges = details_copy.pop("group_ranges", None)
+            flat_group_ranges[addr] = details_copy
+            if nested_ranges:
+                flatten_ranges(nested_ranges)
+
+    flatten_ranges(group_ranges)
+
+    # Pass 2: Füllt die Namen für Haupt- und Mittelgruppen aus den verflachten group_ranges
+    for address, details in flat_group_ranges.items():
+        parts = address.split('/')
+        name = details.get("name")
+        if not name: continue
+
+        if len(parts) == 1: # Hauptgruppe
             main_key = parts[0]
-            if main_key not in hierarchy: hierarchy[main_key] = {"name": f"HG {main_key}", "subgroups": {}}
-            if key not in hierarchy[main_key]["subgroups"]: hierarchy[main_key]["subgroups"][key] = {"name": name, "addresses": {}}
-            else: hierarchy[main_key]["subgroups"][key]["name"] = name
+            if main_key in hierarchy:
+                hierarchy[main_key]["name"] = name
+        elif len(parts) == 2: # Mittelgruppe
+            main_key, _ = parts
+            if main_key in hierarchy and address in hierarchy[main_key].get("subgroups", {}):
+                hierarchy[main_key]["subgroups"][address]["name"] = name
+
+    # Pass 3: Füllt die Namen für die finalen Gruppenadressen (die Blätter des Baums)
     for address, details in group_addresses.items():
         parts = address.split('/')
-        if len(parts) != 3: continue
-        main_key, sub_key_part, _ = parts
-        sub_key = f"{main_key}/{sub_key_part}"
-        name = details.get("name", "N/A")
-        if main_key not in hierarchy: hierarchy[main_key] = {"name": f"HG {main_key}", "subgroups": {}}
-        if sub_key not in hierarchy[main_key]["subgroups"]: hierarchy[main_key]["subgroups"][sub_key] = {"name": f"MG {sub_key}", "addresses": {}}
-        hierarchy[main_key]["subgroups"][sub_key]["addresses"][address] = {"name": name}
+        name = details.get("name")
+        if len(parts) == 3 and name:
+            main_key, sub_key_part, _ = parts
+            sub_key = f"{main_key}/{sub_key_part}"
+            if main_key in hierarchy and sub_key in hierarchy[main_key].get("subgroups", {}):
+                if address in hierarchy[main_key]["subgroups"][sub_key].get("addresses", {}):
+                    hierarchy[main_key]["subgroups"][sub_key]["addresses"][address]["name"] = name
+
+    # Pass 4: Formatiert die Hierarchie in die finale UI-Baumstruktur
     sorted_main_keys = sorted(hierarchy.keys(), key=int)
     for main_key in sorted_main_keys:
         main_group = hierarchy[main_key]
-        main_node = root_node["children"].setdefault(main_key, {"id": f"ga_main_{main_key}", "name": f"({main_key}) {main_group['name']}", "children": {}})
-        sorted_sub_keys = sorted(main_group["subgroups"].keys(), key=lambda k: [int(p) for p in k.split('/')])
+        main_node_name = f"({main_key}) {main_group.get('name') or f'HG {main_key}'}"
+        main_node = root_node["children"].setdefault(main_key, {"id": f"ga_main_{main_key}", "name": main_node_name, "children": {}})
+
+        sorted_sub_keys = sorted(main_group.get("subgroups", {}).keys(), key=lambda k: [int(p) for p in k.split('/')])
         for sub_key in sorted_sub_keys:
             sub_group = main_group["subgroups"][sub_key]
-            sub_node = main_node["children"].setdefault(sub_key, {"id": f"ga_sub_{sub_key.replace('/', '_')}", "name": f"({sub_key}) {sub_group['name']}", "children": {}})
+            sub_node_name = f"({sub_key}) {sub_group.get('name') or f'MG {sub_key}'}"
+            sub_node = main_node["children"].setdefault(sub_key, {"id": f"ga_sub_{sub_key.replace('/', '_')}", "name": sub_node_name, "children": {}})
+
             sorted_addresses = sorted(sub_group.get("addresses", {}).items(), key=lambda item: [int(p) for p in item[0].split('/')])
             for addr_str, addr_details in sorted_addresses:
-                leaf_name = f"({addr_str}) {addr_details['name']}"
+                leaf_name = f"({addr_str}) {addr_details.get('name') or 'N/A'}"
                 sub_node["children"][addr_str] = {"id": f"ga_{addr_str}", "name": leaf_name, "data": {"type": "ga", "gas": {addr_str}}, "children": {}}
+    
     return root_node
 
 def build_pa_tree_data(project: Dict) -> TreeData:
+    """
+    Baut eine hierarchische Baumstruktur der Physikalischen Adressen.
+    Diese Funktion ist robust und baut den Baum auch bei unvollständigen Topologie-Daten auf.
+    """
     pa_tree = {"id": "pa_root", "name": "Physikalische Adressen", "children": {}}
     devices = project.get("devices", {})
     topology = project.get("topology", {})
-    
-    # Create nodes for areas and lines first from topology data
-    for area in topology.get("areas", {}).values():
-        area_id = str(area['address'])
-        area_node = pa_tree["children"].setdefault(area_id, {"id": f"pa_{area_id}", "name": f"Bereich {area_id}: {area['name']}", "children": {}})
-        for line in area.get("lines", {}).values():
-            line_id = f"{area_id}.{line['address']}"
-            line_node = area_node["children"].setdefault(str(line['address']), {"id": f"pa_{line_id}", "name": f"Linie {line_id}: {line['name']}", "children": {}})
+    logging.debug("--- Building PA tree ---")
 
-    # Now add devices to the correct line
+    # Pass 1: Erstellt Name-Lookups für Bereiche und Linien aus den Topologie-Daten
+    # Korrektur: Direkte Iteration über topology.items(), da xknxproject die Bereiche als direktes Dictionary zurückgibt
+    area_names = {addr: details.get('name', '') for addr, details in topology.items()}
+    line_names = {}
+    for area_addr, area_details in topology.items():
+        for line_addr, line_details in area_details.get("lines", {}).items():
+            line_id = f"{area_addr}.{line_addr}"
+            line_names[line_id] = line_details.get('name', '')
+    
+    logging.debug(f"Found {len(area_names)} area names and {len(line_names)} line names.")
+
+    # Pass 2: Erstellt den Baum aus der Geräteliste und legt bei Bedarf Elternknoten an
     for pa, device in devices.items():
         parts = pa.split('.')
+        if len(parts) != 3:
+            logging.warning(f"Skipping malformed PA: {pa}")
+            continue
+        
         area_id, line_id_part, dev_id = parts
         line_id = f"{area_id}.{line_id_part}"
 
-        area_node = pa_tree["children"].get(area_id)
-        if not area_node: continue
-        line_node = area_node["children"].get(line_id_part)
-        if not line_node: continue
+        # Bereichsknoten abrufen oder erstellen
+        area_name = area_names.get(area_id)
+        # Korrektur: Verhindert doppelte Namen, wenn kein Name vorhanden ist
+        area_label = f"({area_id}) {area_name}" if area_name and area_name != f"Bereich {area_id}" else f"Bereich {area_id}"
+        area_node = pa_tree["children"].setdefault(area_id, {
+            "id": f"pa_{area_id}", "name": area_label, "children": {}
+        })
 
-        device_name = f"({pa}) {device['name']}"
-        device_node = line_node["children"].setdefault(dev_id, {"id": f"dev_{pa}", "name": device_name, "children": {}})
+        # Linienknoten abrufen oder erstellen
+        line_name = line_names.get(line_id)
+        # Korrektur: Verhindert doppelte Namen, wenn kein Name vorhanden ist
+        line_label = f"({line_id}) {line_name}" if line_name and line_name != f"Linie {line_id}" else f"Linie {line_id}"
+        line_node = area_node["children"].setdefault(line_id_part, {
+            "id": f"pa_{line_id}", "name": line_label, "children": {}
+        })
+
+        # Geräteknoten hinzufügen
+        device_name = f"({pa}) {device.get('name', 'N/A')}"
+        device_node = line_node["children"].setdefault(dev_id, {
+            "id": f"dev_{pa}", "name": device_name, "children": {}
+        })
         
+        # Kommunikations-Objekte zum Geräteknoten hinzufügen
         processed_co_ids = set()
         for ch_id, channel in device.get("channels", {}).items():
             ch_name = get_best_channel_name(channel, ch_id)
@@ -168,7 +242,8 @@ def build_pa_tree_data(project: Dict) -> TreeData:
         device_level_co_ids = all_co_ids - processed_co_ids
         if device_level_co_ids:
             add_com_objects_to_node(device_node, list(device_level_co_ids), project)
-            
+    
+    logging.debug(f"PA tree built with {len(pa_tree['children'])} areas.")
     return pa_tree
 
 def build_building_tree_data(project: Dict) -> TreeData:
@@ -212,7 +287,7 @@ class FilterInputScreen(ModalScreen[str]):
         ))
     def on_mount(self) -> None: self.query_one("#filter_input", Input).focus()
     def on_input_submitted(self, event: Input.Submitted) -> None: self.dismiss(event.value)
-    def on_key(self, event: "events.Key") -> None:
+    def on_key(self, event: events.Key) -> None:
         if event.key == "escape": self.dismiss("")
 
 class OpenFileScreen(ModalScreen[Tuple[str, bool]]):
@@ -267,8 +342,12 @@ class KNXExplorerApp(App):
         yield Footer()
 
     def show_startup_error(self, exc: Exception, tb_str: str) -> None:
-        loading_label = self.query_one("#loading_label")
-        loading_label.update(f"[bold red]FEHLER BEIM LADEN[/]\n[yellow]Meldung:[/] {exc}\n\n[bold]Traceback:[/]\n{tb_str}")
+        try:
+            loading_label = self.query_one("#loading_label")
+            loading_label.update(f"[bold red]FEHLER BEIM LADEN[/]\n[yellow]Meldung:[/] {exc}\n\n[bold]Traceback:[/]\n{tb_str}")
+        except Exception:
+            logging.critical("Konnte UI-Fehler nicht anzeigen.", exc_info=True)
+
 
     def on_mount(self) -> None:
         self.run_worker(self.load_all_data, name="data_loader", thread=True)
@@ -318,7 +397,10 @@ class KNXExplorerApp(App):
                 child_node = parent_node.add(label, data=node_data.get("data"))
                 if node_children := node_data.get("children"):
                     add_nodes(child_node, node_children)
-        add_nodes(tree.root, data["children"])
+        
+        if "children" in data:
+            add_nodes(tree.root, data["children"])
+        
         tree.root.expand()
         self._update_tree_visuals(tree.root)
 
@@ -395,7 +477,6 @@ class KNXExplorerApp(App):
                     if not log_files_in_zip:
                         log_widget.write(f"\n[red]Keine .log-Datei im ZIP-Archiv '{os.path.basename(log_file_path)}' gefunden.[/red]")
                         return
-                    # Lese die erste gefundene .log-Datei
                     with zf.open(log_files_in_zip[0]) as log_file:
                         lines = io.TextIOWrapper(log_file, encoding='utf-8').readlines()
             else:
@@ -472,7 +553,6 @@ class KNXExplorerApp(App):
                     Path(".env").touch()
                     dotenv_path = find_dotenv()
                 
-                # LOG_FILE wird für knx-lens spezifisch, LOG_PATH für den Logger
                 set_key(dotenv_path, "LOG_FILE", path)
                 self.notify("Pfad als neuen Standard gespeichert.", severity="information")
 
@@ -495,37 +575,54 @@ class KNXExplorerApp(App):
 
 ### --- START ---
 def main():
-    css_content = """
-    #loading_label { width: 100%; height: 100%; content-align: center middle; padding: 1; }
-    #filter_dialog, #open_file_dialog { width: 80%; max-width: 70; height: auto; padding: 1 2; background: $surface; border: heavy $primary; }
-    #filter_dialog > Label, #open_file_dialog > Label { margin-bottom: 1; }
-    #filter_input, #path_input { background: $boost; }
-    #log_view { border: round white; padding: 1; }
-    #open_file_dialog > Horizontal { height: auto; align: center middle; margin-top: 1; }
-    """
-    with open("knx-lens.css", "w") as f:
-        f.write(css_content)
+    try:
+        # --- Logging Konfiguration ---
+        logging.basicConfig(
+            level=logging.INFO, # Geändert von DEBUG zu INFO
+            filename='knx_lens.log',
+            filemode='w',
+            format='%(asctime)s - %(levelname)s - %(message)s'
+        )
+        logging.info("Anwendung gestartet.")
 
-    load_dotenv()
-    parser = argparse.ArgumentParser(description="KNX Projekt-Explorer und Log-Filter.")
-    parser.add_argument("--path", help="Pfad zur .knxproj Datei (überschreibt .env)")
-    parser.add_argument("--log-file", help="Pfad zur Log-Datei für die Filterung (überschreibt .env)")
-    parser.add_argument("--password", help="Passwort für die Projektdatei (überschreibt .env)")
-    args = parser.parse_args()
+        css_content = """
+        #loading_label { width: 100%; height: 100%; content-align: center middle; padding: 1; }
+        #filter_dialog, #open_file_dialog { width: 80%; max-width: 70; height: auto; padding: 1 2; background: $surface; border: heavy $primary; }
+        #filter_dialog > Label, #open_file_dialog > Label { margin-bottom: 1; }
+        #filter_input, #path_input { background: $boost; }
+        #log_view { border: round white; padding: 1; }
+        #open_file_dialog > Horizontal { height: auto; align: center middle; margin-top: 1; }
+        """
+        with open("knx-lens.css", "w") as f:
+            f.write(css_content)
 
-    config = {
-        'knxproj_path': args.path or os.getenv('KNX_PROJECT_PATH'),
-        'log_file': args.log_file or os.getenv('LOG_FILE'),
-        'password': args.password or os.getenv('KNX_PASSWORD'),
-        'log_path': os.getenv('LOG_PATH') # Für Fallback, wenn log_file nicht gesetzt ist
-    }
+        load_dotenv()
+        parser = argparse.ArgumentParser(description="KNX Projekt-Explorer und Log-Filter.")
+        parser.add_argument("--path", help="Pfad zur .knxproj Datei (überschreibt .env)")
+        parser.add_argument("--log-file", help="Pfad zur Log-Datei für die Filterung (überschreibt .env)")
+        parser.add_argument("--password", help="Passwort für die Projektdatei (überschreibt .env)")
+        args = parser.parse_args()
 
-    if not config['knxproj_path']:
-        print("FEHLER: Projektpfad nicht gefunden. Bitte 'setup.py' ausführen oder mit --path angeben.", file=sys.stderr)
+        config = {
+            'knxproj_path': args.path or os.getenv('KNX_PROJECT_PATH'),
+            'log_file': args.log_file or os.getenv('LOG_FILE'),
+            'password': args.password or os.getenv('KNX_PASSWORD'),
+            'log_path': os.getenv('LOG_PATH')
+        }
+
+        if not config['knxproj_path']:
+            logging.critical("Projektpfad nicht gefunden.")
+            print("FEHLER: Projektpfad nicht gefunden. Bitte 'setup.py' ausführen oder mit --path angeben.", file=sys.stderr)
+            sys.exit(1)
+        
+        app = KNXExplorerApp(config=config)
+        app.run()
+
+    except Exception:
+        logging.critical("Unbehandelter Fehler in der main() Funktion", exc_info=True)
+        traceback.print_exc(file=sys.stderr)
         sys.exit(1)
-    
-    app = KNXExplorerApp(config=config)
-    app.run()
+
 
 if __name__ == "__main__":
     main()

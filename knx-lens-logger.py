@@ -114,9 +114,24 @@ def telegram_to_log_message(telegram: Telegram, knx_project: Optional[KNXProject
     else:
         # Ohne Projektdatei nur die Rohdaten verwenden
         data_str = str(payload)
-
+    col_widths = {
+        "timestamp": 26, # z.B. für "2025-06-27 10:15:18.123456"
+        "ia_string": 9,
+        "ia_name": 30,
+        "ga_string": 8,
+        "ga_name": 34,
+        "data": 50      # Annahme für die Daten-Spalte
+    }
     # Erzeugt eine saubere, mit Pipe getrennte Zeile
-    return f"{timestamp} | {ia_string:<9} | {ia_name:<30} | {ga_string:<8} | {ga_name:<34} | {data_str}"
+    line = (
+    f"{timestamp:<{col_widths['timestamp']}} | "
+    f"{ia_string[:col_widths['ia_string']]:<{col_widths['ia_string']}} | "
+    f"{ia_name[:col_widths['ia_name']]:<{col_widths['ia_name']}} | "
+    f"{ga_string[:col_widths['ga_string']]:<{col_widths['ga_string']}} | "
+    f"{ga_name[:col_widths['ga_name']]:<{col_widths['ga_name']}} | "
+    f"{data_str[:col_widths['data']]:<{col_widths['data']}}"
+    )
+    return line
 
 def load_project(file_path: str, password: Optional[str]) -> Optional[KNXProject]:
     """Lädt ein KNX-Projekt aus einer Datei."""
