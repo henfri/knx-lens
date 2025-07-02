@@ -85,6 +85,7 @@ The tools require Python 3.10 or higher. Linux and Windows are tested.
 ## Configuration
 
 The configuration is stored centrally in a `.env` file in the same directory.
+Before you start the setup.py you should transfer your project file to the machine if it is not already located there.
 
 ### 1. `knx-lens.py` Setup (First Time)
 
@@ -183,8 +184,8 @@ As an alternative to the terminal, you can also start the explorer via the web i
     ```bash
     python knx-lens-web.py
     ```
-2.  **Open your browser** and go to the displayed address (usually `http://127.0.0.1:8080`). The operation in the browser is identical to that in the terminal. Currently, only possible on the local machine; Remote access planned for future version
-
+2.  **Open your browser** and go to the displayed address (usually `http://127.0.0.1:8080`). The operation in the browser is identical to that in the terminal.
+3.  You can also access the web server from other devices. Use the following URL: http://ipserver:8000 
 
 
 ### Step 4: Running the Logger as a Systemd Service (Linux, optional)
@@ -216,6 +217,64 @@ To automatically start the `knx-lens-logger.py` on a modern Debian-based system 
     ```bash
     journalctl -u knx-lens-logger.service -f
     ```
+### Step 5: Running the Webserver as a Systemd Service (Linux, optional)
+
+To automatically start the `knx-lens-web.py` on a modern Debian-based system (like Raspberry Pi OS, Ubuntu, etc.), you can use `systemd`.
+
+1.  **Create the Service File**:
+    Create a new file named `knx-lens-web.service` in the `/etc/systemd/system/` directory. You will need `sudo` rights to do this.
+    ```bash
+    sudo nano /etc/systemd/system/knx-lens-web.service    
+    ```
+    **Crucially, you must replace the placeholder values** for `User`, `Group`, `WorkingDirectory`, and `ExecStart` with your specific paths and username.
+    
+    ```bash
+    [Unit]
+    Description=KNX Lens Web Service
+    After=network.target
+
+    [Service]
+    # IMPORTANT: Replace 'your_user' and 'your_group' with your actual username and group.
+    # You can find your username by typing 'whoami' in the terminal.
+    # The group is usually the same as the username.
+    User=your_user
+    Group=your_group
+
+    # IMPORTANT: Replace '/path/to/knx-lens-suite' with the absolute path to the directory
+    # where your knx-lens scripts and the .env file are located.
+    WorkingDirectory=/root/knx-lens
+    Environment=PATH=/path/to/knx-lens-suite/.venv/bin
+
+    # IMPORTANT: The path to the python executable inside your virtual environment.
+    # It should be '/path/to/knx-lens-suite/.venv/bin/python'.
+    ExecStart=/root/knx-lens/.venv/bin/python /root/knx-lens/knx-lens-web.py --daemon
+
+    # Restart the service if it fails
+    Restart=on-failure
+    RestartSec=5
+
+    [Install]
+    WantedBy=multi-user.target
+    ```
+
+3.  **Reload, Enable, and Start the Service**:
+    After saving the file, run the following commands to make systemd aware of the new service, enable it to start on boot, and start it immediately:
+    ```bash
+    sudo systemctl daemon-reload
+    sudo systemctl enable knx-lens-web.service
+    sudo systemctl start knx-lens-web.service
+    ```
+
+4.  **Check the Service Status**:
+    You can check if the service is running correctly with:
+    ```bash
+    sudo systemctl status knx-lens-web.service
+    ```
+    To view the live logs from the service, use:
+    ```bash
+    journalctl -u knx-lens-web.service -f
+    ```
+    
 
 ## Troubleshooting
 
