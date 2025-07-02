@@ -65,7 +65,7 @@ KNX-Lens is tested in Linux and Windows.
 
 ## Installation
 
-The tools require Python 3.8 or higher. Linux and Windows are tested
+The tools require Python 3.10 or higher. Linux and Windows are tested.
 
 1.  **Clone or download the repository**:
     Ensure that you have the files `knx-lens-logger.py`, `knx-lens.py`, and `knx-lens-web.py` in one directory.
@@ -98,6 +98,8 @@ The script will guide you through the following steps:
 * Scanning the network for gateways.
 * Choosing a gateway.
 * Specifying the directory where the `knx_bus.log` files should be saved.
+
+Note: in Windows, currently no interfaces are found and it is best to create the .env manually
 
 The results will be automatically saved in your `.env` file.
 

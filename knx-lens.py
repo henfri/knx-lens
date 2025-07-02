@@ -2,12 +2,11 @@
 # -*- coding: utf-8 -*-
 
 """
-An interactive KNX Project Explorer and Log Filter.
-- Allows Browse the project by building, physical, and group structure.
-- Filters log files (including from .zip archives) based on the selection.
-- Displays the last received payload and a short history directly in the tree.
-- NEW: Switchable view (3 modes) to display history, sender addresses, or sender names.
-- Shortcuts: (o) Open Log, (r) Reload Log, (f) Filter, (a) Select, (t) Auto-Reload, (c) Copy, (d) Display Mode, (q) Quit.
+Ein interaktiver KNX Projekt-Explorer und Log-Filter.
+- Ermöglicht das Browsen des Projekts nach Gebäude-, Physikalischer und Gruppen-Struktur.
+- Filtert Log-Dateien (auch aus .zip-Archiven) basierend auf der Auswahl.
+- Zeigt den zuletzt empfangenen Payload und eine kurze Historie direkt im Baum an.
+- Shortcuts: (o) Log öffnen, (r) Log neu laden, (f) Filtern, (a) Auswahl, (t) Auto-Reload, (c) Kopieren, (q) Beenden.
 """
 import json
 import csv
@@ -20,6 +19,7 @@ import re
 import zipfile
 import io
 import logging
+import time
 from pathlib import Path
 from typing import Dict, List, Any, Optional, Set, Tuple
 
@@ -35,13 +35,15 @@ from textual import events
 from textual.timer import Timer
 from xknxproject import XKNXProj
 
-### --- SETUP & CONSTANTS ---
+### --- SETUP & KONSTANTEN ---
+# Anpassbares Log-Level (Optionen: logging.DEBUG, logging.INFO, logging.WARNING, logging.ERROR)
+LOG_LEVEL = logging.INFO
 TreeData = Dict[str, Any]
 
-### --- CORE LOGIC: PARSING & DATA STRUCTURING ---
+### --- KERNLOGIK: PARSING & DATENSTRUKTURIERUNG ---
 
 def get_md5_hash(file_path: str) -> str:
-    """Calculates the MD5 hash of a file."""
+    """Berechnet den MD5-Hash einer Datei."""
     hash_md5 = hashlib.md5()
     with open(file_path, "rb") as f:
         for chunk in iter(lambda: f.read(4096), b""):
@@ -49,10 +51,11 @@ def get_md5_hash(file_path: str) -> str:
     return hash_md5.hexdigest()
 
 def load_or_parse_project(knxproj_path: str, password: Optional[str]) -> Dict:
-    """Loads a KNX project from cache or parses it anew."""
+    """Lädt ein KNX-Projekt aus dem Cache oder parst es neu."""
+    start_time = time.time()
     project_data = {}
     if not os.path.exists(knxproj_path):
-        raise FileNotFoundError(f"Project file not found at '{knxproj_path}'")
+        raise FileNotFoundError(f"Projektdatei nicht gefunden unter '{knxproj_path}'")
     
     cache_path = knxproj_path + ".cache.json"
     if os.path.exists(cache_path):
@@ -61,28 +64,33 @@ def load_or_parse_project(knxproj_path: str, password: Optional[str]) -> Dict:
                 cache_data = json.load(f)
                 current_md5 = get_md5_hash(knxproj_path)
                 if cache_data.get("md5") == current_md5:
-                    logging.info("Cache is up-to-date. Loading from cache...")
+                    logging.info("Cache ist aktuell. Lade aus dem Cache...")
+                    duration = time.time() - start_time
+                    logging.info(f"Projekt '{os.path.basename(knxproj_path)}' in {duration:.2f}s aus dem Cache geladen.")
                     return cache_data["project"]
             except (json.JSONDecodeError, KeyError):
-                logging.warning("Cache is corrupt. Reparsing project...")
+                logging.warning("Cache ist korrupt. Parse Projekt neu...")
     
-    logging.info(f"Parsing KNX project file: {knxproj_path} (this may take a moment)...")
+    logging.info(f"Parse KNX-Projektdatei: {knxproj_path} (dies kann einen Moment dauern)...")
     xknxproj = XKNXProj(knxproj_path, password=password)
     project_data = xknxproj.parse()
 
     current_md5 = get_md5_hash(knxproj_path)
     new_cache_data = {"md5": current_md5, "project": project_data}
-    logging.info(f"Saving new cache to {cache_path}")
+    logging.info(f"Speichere neuen Cache nach {cache_path}")
     with open(cache_path, 'w', encoding='utf-8') as f:
         json.dump(new_cache_data, f, indent=2)
+
+    duration = time.time() - start_time
+    logging.info(f"Projekt '{os.path.basename(knxproj_path)}' in {duration:.2f}s neu geparst und gecacht.")
     
     return project_data
 
 def get_best_channel_name(channel: Dict, ch_id: str) -> str:
-    return channel.get("function_text") or channel.get("name") or f"Channel-{ch_id}"
+    return channel.get("function_text") or channel.get("name") or f"Kanal-{ch_id}"
 
 def add_com_objects_to_node(parent_node: Dict, com_obj_ids: List[str], project_data: Dict):
-    """Adds Communication Objects as children to a node and saves the original name."""
+    """Fügt Communication Objects als Kinder zu einem Knoten hinzu und speichert den Originalnamen."""
     comm_objects = project_data.get("communication_objects", {})
     for co_id in com_obj_ids:
         co = comm_objects.get(co_id)
@@ -98,10 +106,12 @@ def add_com_objects_to_node(parent_node: Dict, com_obj_ids: List[str], project_d
             }
 
 def build_ga_tree_data(project: Dict) -> TreeData:
-    """Builds a hierarchical tree structure of group addresses from a KNX project."""
+    """
+    Baut eine hierarchische Baumstruktur von Gruppenadressen aus einem KNX-Projekt.
+    """
     group_addresses = project.get("group_addresses", {})
     group_ranges = project.get("group_ranges", {})
-    root_node: TreeData = {"id": "ga_root", "name": "Functions", "children": {}}
+    root_node: TreeData = {"id": "ga_root", "name": "Funktionen", "children": {}}
     
     if not group_addresses:
         return root_node
@@ -156,13 +166,13 @@ def build_ga_tree_data(project: Dict) -> TreeData:
     sorted_main_keys = sorted(hierarchy.keys(), key=int)
     for main_key in sorted_main_keys:
         main_group = hierarchy[main_key]
-        main_node_name = f"({main_key}) {main_group.get('name') or f'MG {main_key}'}"
+        main_node_name = f"({main_key}) {main_group.get('name') or f'HG {main_key}'}"
         main_node = root_node["children"].setdefault(main_key, {"id": f"ga_main_{main_key}", "name": main_node_name, "children": {}})
 
         sorted_sub_keys = sorted(main_group.get("subgroups", {}).keys(), key=lambda k: [int(p) for p in k.split('/')])
         for sub_key in sorted_sub_keys:
             sub_group = main_group["subgroups"][sub_key]
-            sub_node_name = f"({sub_key}) {sub_group.get('name') or f'SG {sub_key}'}"
+            sub_node_name = f"({sub_key}) {sub_group.get('name') or f'MG {sub_key}'}"
             sub_node = main_node["children"].setdefault(sub_key, {"id": f"ga_sub_{sub_key.replace('/', '_')}", "name": sub_node_name, "children": {}})
 
             sorted_addresses = sorted(sub_group.get("addresses", {}).items(), key=lambda item: [int(p) for p in item[0].split('/')])
@@ -177,7 +187,7 @@ def build_ga_tree_data(project: Dict) -> TreeData:
     return root_node
 
 def build_pa_tree_data(project: Dict) -> TreeData:
-    pa_tree = {"id": "pa_root", "name": "Physical Addresses", "children": {}}
+    pa_tree = {"id": "pa_root", "name": "Physikalische Adressen", "children": {}}
     devices = project.get("devices", {})
     topology = project.get("topology", {})
     
@@ -198,11 +208,11 @@ def build_pa_tree_data(project: Dict) -> TreeData:
         line_id = f"{area_id}.{line_id_part}"
 
         area_name = area_names.get(area_id)
-        area_label = f"({area_id}) {area_name}" if area_name and area_name != f"Area {area_id}" else f"Area {area_id}"
+        area_label = f"({area_id}) {area_name}" if area_name and area_name != f"Bereich {area_id}" else f"Bereich {area_id}"
         area_node = pa_tree["children"].setdefault(area_id, {"id": f"pa_{area_id}", "name": area_label, "children": {}})
 
         line_name = line_names.get(line_id)
-        line_label = f"({line_id}) {line_name}" if line_name and line_name != f"Line {line_id}" else f"Line {line_id}"
+        line_label = f"({line_id}) {line_name}" if line_name and line_name != f"Linie {line_id}" else f"Linie {line_id}"
         line_node = area_node["children"].setdefault(line_id_part, {"id": f"pa_{line_id}", "name": line_label, "children": {}})
 
         device_name = f"({pa}) {device.get('name', 'N/A')}"
@@ -224,16 +234,16 @@ def build_pa_tree_data(project: Dict) -> TreeData:
     return pa_tree
 
 def build_building_tree_data(project: Dict) -> TreeData:
-    building_tree = {"id": "bldg_root", "name": "Building Structure", "children": {}}
+    building_tree = {"id": "bldg_root", "name": "Gebäudestruktur", "children": {}}
     locations = project.get("locations", {})
     devices = project.get("devices", {})
     def process_space(space: Dict, parent_node: Dict):
-        space_name = space.get("name", "Unnamed Area")
+        space_name = space.get("name", "Unbenannter Bereich")
         space_node = parent_node["children"].setdefault(space_name, {"id": f"loc_{space.get('identifier', space_name)}", "name": space_name, "children": {}})
         for pa in space.get("devices", []):
             device = devices.get(pa)
             if not device: continue
-            device_name = f"({pa}) {device.get('name', 'Unnamed')}"
+            device_name = f"({pa}) {device.get('name', 'Unbenannt')}"
             device_node = space_node["children"].setdefault(device_name, {"id": f"dev_{pa}", "name": device_name, "children": {}})
             processed_co_ids = set()
             for ch_id, channel in device.get("channels", {}).items():
@@ -255,11 +265,11 @@ def build_building_tree_data(project: Dict) -> TreeData:
 ### --- TUI: SCREENS & MODALS ---
 
 class FilterInputScreen(ModalScreen[str]):
-    """A modal screen for filter input."""
+    """Ein modaler Bildschirm für die Filtereingabe."""
     def compose(self) -> ComposeResult:
         yield Center(Vertical(
-            Label("Filter Tree (Enter to confirm, ESC to cancel):"),
-            Input(placeholder="Filter text...", id="filter_input"),
+            Label("Baum filtern (Enter zum Bestätigen, ESC zum Abbrechen):"),
+            Input(placeholder="Filtertext...", id="filter_input"),
             id="filter_dialog"
         ))
     def on_mount(self) -> None: self.query_one("#filter_input", Input).focus()
@@ -268,15 +278,15 @@ class FilterInputScreen(ModalScreen[str]):
         if event.key == "escape": self.dismiss("")
 
 class OpenFileScreen(ModalScreen[Tuple[str, bool]]):
-    """A modal screen for opening a log file."""
+    """Ein modaler Bildschirm zum Öffnen einer Log-Datei."""
     def compose(self) -> ComposeResult:
         yield Center(Vertical(
-            Label("Enter path to log file (.log or .zip):"),
-            Input(placeholder="/path/to/file.log", id="path_input"),
+            Label("Pfad zur Log-Datei (.log oder .zip) eingeben:"),
+            Input(placeholder="/pfad/zur/datei.log", id="path_input"),
             Horizontal(
-                Button("Open Temporarily", variant="primary", id="open_temp"),
-                Button("Open & Save as Default", variant="success", id="open_save"),
-                Button("Cancel", variant="error", id="cancel"),
+                Button("Temporär öffnen", variant="primary", id="open_temp"),
+                Button("Öffnen & als Standard speichern", variant="success", id="open_save"),
+                Button("Abbrechen", variant="error", id="cancel"),
             ),
             id="open_file_dialog"
         ))
@@ -290,19 +300,18 @@ class OpenFileScreen(ModalScreen[Tuple[str, bool]]):
         elif event.button.id == "open_save":
             self.dismiss((path, True))
 
-### --- TUI: MAIN APPLICATION ---
+### --- TUI: HAUPTANWENDUNG ---
 class KNXExplorerApp(App):
     CSS_PATH = "knx-lens.css"
     BINDINGS = [
-        Binding("q", "quit", "Quit"),
-        Binding("a", "toggle_selection", "Selection"),
-        Binding("c", "copy_label", "Copy"),
-        Binding("d", "toggle_display_mode", "Display Mode"),
-        Binding("f", "filter_tree", "Filter"),
-        Binding("o", "open_log_file", "Open Log"),
-        Binding("r", "reload_log_file", "Reload Log"),
+        Binding("q", "quit", "Beenden"),
+        Binding("a", "toggle_selection", "Auswahl"),
+        Binding("c", "copy_label", "Kopieren"),
+        Binding("f", "filter_tree", "Filtern"),
+        Binding("o", "open_log_file", "Log öffnen"),
+        Binding("r", "reload_log_file", "Log neu laden"),
         Binding("t", "toggle_log_reload", "Auto-Reload Log"),
-        Binding("escape", "reset_filter", "Reset Filter", show=True),
+        Binding("escape", "reset_filter", "Auswahl zurücksetzen", show=True),
     ]
 
     def __init__(self, config: Dict):
@@ -316,21 +325,21 @@ class KNXExplorerApp(App):
         self.log_widget: Optional[RichLog] = None
         self.log_reload_timer: Optional[Timer] = None
         self.payload_history: Dict[str, List[Dict[str, str]]] = {}
-        self.display_mode = 0  # 0: History, 1: Sender Addresses, 2: Sender Names
+        self.cached_log_lines: List[str] = []
+
 
     def compose(self) -> ComposeResult:
-        yield Header(name="KNX Project Explorer")
-        yield Vertical(Static("Loading and processing project file...", id="loading_label"))
+        yield Header(name="KNX Projekt-Explorer")
+        yield Vertical(Static("Lade und verarbeite Projektdatei...", id="loading_label"))
         yield TabbedContent(id="main_tabs", disabled=True)
         yield Footer()
 
     def show_startup_error(self, exc: Exception, tb_str: str) -> None:
         try:
             loading_label = self.query_one("#loading_label")
-            loading_label.update(f"[bold red]ERROR ON LOAD[/]\n[yellow]Message:[/] {exc}\n\n[bold]Traceback:[/]\n{tb_str}")
+            loading_label.update(f"[bold red]FEHLER BEIM LADEN[/]\n[yellow]Meldung:[/] {exc}\n\n[bold]Traceback:[/]\n{tb_str}")
         except Exception:
-            logging.critical("Could not display UI error.", exc_info=True)
-
+            logging.critical("Konnte UI-Fehler nicht anzeigen.", exc_info=True)
 
     def on_mount(self) -> None:
         self.run_worker(self.load_all_data, name="data_loader", thread=True)
@@ -350,22 +359,22 @@ class KNXExplorerApp(App):
             self.query_one("#loading_label").remove()
             tabs = self.query_one(TabbedContent)
             
-            building_tree = Tree("Building", id="building_tree")
-            pa_tree = Tree("Lines", id="pa_tree")
-            ga_tree = Tree("Functions", id="ga_tree")
+            building_tree = Tree("Gebäude", id="building_tree")
+            pa_tree = Tree("Linien", id="pa_tree")
+            ga_tree = Tree("Funktionen", id="ga_tree")
             self.log_widget = RichLog(highlight=True, markup=True, id="log_view")
 
-            tabs.add_pane(TabPane("Building Structure", building_tree, id="building_pane"))
-            tabs.add_pane(TabPane("Physical Addresses", pa_tree, id="pa_pane"))
-            tabs.add_pane(TabPane("Group Addresses", ga_tree, id="ga_pane"))
-            tabs.add_pane(TabPane("Log View", self.log_widget, id="log_pane"))
+            tabs.add_pane(TabPane("Gebäudestruktur", building_tree, id="building_pane"))
+            tabs.add_pane(TabPane("Physikalische Adressen", pa_tree, id="pa_pane"))
+            tabs.add_pane(TabPane("Gruppenadressen", ga_tree, id="ga_pane"))
+            tabs.add_pane(TabPane("Log-Ansicht", self.log_widget, id="log_pane"))
             
             self._populate_tree_from_data(building_tree, self.building_tree_data)
             self._populate_tree_from_data(pa_tree, self.pa_tree_data)
             self._populate_tree_from_data(ga_tree, self.ga_tree_data)
 
             tabs.disabled = False
-            self.call_later(self._update_log_view)
+            self.call_later(self._load_log_file_and_update_views)
         except Exception as e:
             self.show_startup_error(e, traceback.format_exc())
 
@@ -406,19 +415,23 @@ class KNXExplorerApp(App):
         self.log_widget.clear()
 
         if not self.selected_gas:
-            self.log_widget.write("[yellow]No group addresses selected for filtering. Toggle with 'a'.[/yellow]")
+            self.log_widget.write("[yellow]Keine Gruppenadressen für den Filter ausgewählt. Mit 'a' umschalten.[/yellow]")
             return
+        
+        start_time = time.time()
 
         first_content_lines = [line for line in lines[:20] if line.strip() and not line.strip().startswith("=")]
         log_format = self._detect_log_format(first_content_lines)
 
         if log_format is None:
-            self.log_widget.write(f"[red]Could not determine log format.[/red]\n[dim]Supported: CSV (';') or Pipe-separated ('|').[/dim]")
+            self.log_widget.write(f"[red]Konnte das Log-Format nicht bestimmen.[/red]\n[dim]Unterstützt: CSV (';') oder Pipe-getrennt ('|').[/dim]")
             return
         
         sorted_gas = sorted(list(self.selected_gas))
-        self.log_widget.write(f"[dim]Filtering log for {len(sorted_gas)} GAs: {', '.join(sorted_gas)}[/dim]\n")
-        
+        filter_info = f"Filtere Log für {len(sorted_gas)} GAs: {', '.join(sorted_gas)}"
+        self.log_widget.write(f"[dim]{filter_info}[/dim]\n")
+        logging.info(f"Applizieren des Log-Ansicht-Filters für {len(sorted_gas)} GAs.")
+
         found_count = 0
         for line in lines:
             clean_line = line.strip()
@@ -438,12 +451,13 @@ class KNXExplorerApp(App):
                 self.log_widget.write(line.rstrip())
                 found_count += 1
         
-        self.log_widget.write(f"\n[green]{found_count} matching entries found.[/green]")
+        duration = time.time() - start_time
+        logging.info(f"Log-Ansicht gefiltert. {found_count} Einträge in {duration:.4f}s gefunden.")
+        self.log_widget.write(f"\n[green]{found_count} passende Einträge gefunden.[/green] [dim]({duration:.2f}s)[/dim]")
 
     def _update_payload_history_from_log(self, lines: List[str]):
         """
-        Parses the log file and updates the self.payload_history dictionary.
-        EXTENDED: Now also saves the source PA and the associated GA.
+        Parst die Log-Datei und aktualisiert das `self.payload_history` Dictionary.
         """
         self.payload_history.clear()
         first_content_lines = [line for line in lines[:20] if line.strip() and not line.strip().startswith("=")]
@@ -455,36 +469,28 @@ class KNXExplorerApp(App):
             clean_line = line.strip()
             if not clean_line: continue
             try:
-                timestamp, source_pa, ga, payload = None, None, None, None
+                timestamp, ga, payload = None, None, None
                 if log_format == 'pipe_separated':
                     parts = [p.strip() for p in clean_line.split('|')]
                     if len(parts) > 5:
-                        timestamp, source_pa, ga, payload = parts[0], parts[1], parts[3], parts[5]
-#2025-06-27 09:40:47.034 | 1.0.24      |SCN-P360D3.01 Presence Detector 3S | 6/1/7      | Sens_Env EG Hall Brightness       | 278.56 lx
-#2025-06-27 09:40:48.111 | 1.0.35      |OpenKNX: Sensor Module, VPM, Gue | 6/1/4      | Sens_Env EG Guest Bath VOC Co2    | 563.84 ppm
-#2025-06-27 09:40:48.882 | 1.0.34      |OpenKNX: Sensor Module-Big - Sh | 6/1/65     | Sens_Env EG Shed VOC Co2          | 525.12 ppm
+                        timestamp, ga, payload = parts[0], parts[3], parts[5]
                 elif log_format == 'csv':
                     row = next(csv.reader([clean_line], delimiter=';'))
                     if len(row) > 6:
-                        timestamp, source_pa, ga, payload = row[0], row[3], row[4], row[6]
-                
-                if timestamp and source_pa and ga and payload and re.match(r'\d+/\d+/\d+', ga):
+                        timestamp, ga, payload = row[0], row[4], row[6]
+                if timestamp and ga and payload and re.match(r'\d+/\d+/\d+', ga):
                     if ga not in self.payload_history:
                         self.payload_history[ga] = []
-                    self.payload_history[ga].append({
-                        'timestamp': timestamp, 
-                        'payload': payload,
-                        'source_pa': source_pa,
-                        'ga': ga
-                    })
+                    self.payload_history[ga].append({'timestamp': timestamp, 'payload': payload})
             except (IndexError, StopIteration, csv.Error) as e:
-                logging.debug(f"Could not parse log line: '{clean_line}' - Error: {e}")
+                logging.debug(f"Konnte Log-Zeile nicht parsen: '{clean_line}' - Fehler: {e}")
                 continue
         
         for ga in self.payload_history:
             self.payload_history[ga].sort(key=lambda x: x['timestamp'])
 
-    def _update_log_view(self):
+    def _load_log_file_and_update_views(self):
+        """Liest die Log-Datei von der Festplatte, aktualisiert den Cache und alle Ansichten."""
         if not self.log_widget: return
         log_widget = self.log_widget
         
@@ -492,13 +498,17 @@ class KNXExplorerApp(App):
 
         if not os.path.exists(log_file_path):
             log_widget.clear()
-            log_widget.write(f"[red]ERROR: Log file not found at '{log_file_path}'[/red]")
-            log_widget.write("[dim]Use 'o' to open a different file.[/dim]")
+            log_widget.write(f"[red]FEHLER: Log-Datei nicht gefunden unter '{log_file_path}'[/red]")
+            log_widget.write("[dim]Mit 'o' eine andere Datei öffnen.[/dim]")
+            self.cached_log_lines = []
             return
+        
+        start_time = time.time()
+        logging.info(f"Lese Log-Datei von Festplatte: '{log_file_path}'")
 
         if not self.log_reload_timer:
             log_widget.clear()
-            log_widget.write(f"[bold]Reading Log:[/] {os.path.basename(log_file_path)}")
+            log_widget.write(f"[bold]Lese Log:[/] {os.path.basename(log_file_path)}")
             
         try:
             lines = []
@@ -506,7 +516,8 @@ class KNXExplorerApp(App):
                 with zipfile.ZipFile(log_file_path, 'r') as zf:
                     log_files_in_zip = [name for name in zf.namelist() if name.lower().endswith('.log')]
                     if not log_files_in_zip:
-                        log_widget.write(f"\n[red]No .log file found in the ZIP archive.[/red]")
+                        log_widget.write(f"\n[red]Keine .log-Datei im ZIP-Archiv gefunden.[/red]")
+                        self.cached_log_lines = []
                         return
                     with zf.open(log_files_in_zip[0]) as log_file:
                         lines = io.TextIOWrapper(log_file, encoding='utf-8').readlines()
@@ -514,14 +525,33 @@ class KNXExplorerApp(App):
                 with open(log_file_path, 'r', encoding='utf-8') as f:
                     lines = f.readlines()
             
-            self._update_payload_history_from_log(lines)
+            self.cached_log_lines = lines
+            
+            self._update_payload_history_from_log(self.cached_log_lines)
             for tree in self.query(Tree):
                 self._update_tree_labels_recursively(tree.root)
-            self._process_log_lines(lines)
+            self._process_log_lines(self.cached_log_lines)
+
+            duration = time.time() - start_time
+            logging.info(f"Log-Datei '{os.path.basename(log_file_path)}' in {duration:.2f}s gelesen und verarbeitet.")
 
         except Exception as e:
-            log_widget.write(f"\n[red]Error processing log file: {e}[/red]")
+            log_widget.write(f"\n[red]Fehler beim Verarbeiten der Log-Datei: {e}[/red]")
             log_widget.write(f"[dim]{traceback.format_exc()}[/dim]")
+            logging.error(f"Fehler beim Verarbeiten von '{log_file_path}': {e}", exc_info=True)
+            self.cached_log_lines = []
+            
+    def _refilter_log_view(self) -> None:
+        """Filtert die bereits geladenen Log-Zeilen neu, ohne die Datei erneut zu lesen."""
+        if not self.log_widget: return
+        
+        if not self.cached_log_lines:
+            self._load_log_file_and_update_views()
+            return
+        
+        logging.info("Log-Ansicht wird mit gecachten Daten neu gefiltert.")
+        self._process_log_lines(self.cached_log_lines)
+
 
     def _get_descendant_gas(self, node: TreeNode) -> Set[str]:
         gas = set()
@@ -532,8 +562,10 @@ class KNXExplorerApp(App):
         return gas
 
     def _update_tree_labels_recursively(self, node: TreeNode) -> None:
-        """Rebuilds a node's label from scratch based on the current display mode."""
-        # --- Step 1: Determine the pure text content of the label ---
+        """
+        KORRIGIERT & ZENTRALISIERT: Baut das Label eines Knotens von Grund auf neu.
+        Verhindert die Akkumulation von Präfixen auf höheren Ebenen.
+        """
         display_label = ""
         if node.data and "original_name" in node.data:
             original_name = node.data["original_name"]
@@ -548,42 +580,19 @@ class KNXExplorerApp(App):
                 
                 if combined_history:
                     combined_history.sort(key=lambda x: x['timestamp'])
-                    latest_event = combined_history[-1]
-                    current_payload = latest_event.get('payload', 'N/A')
+                    latest_payloads = [item['payload'] for item in combined_history[-3:]]
+                    current_payload = latest_payloads[-1]
+                    previous_payloads = latest_payloads[-2::-1]
                     
-                    payload_str = ""
-
-                    # MODE 0: Payload History (Default)
-                    if self.display_mode == 0:
-                        latest_payloads = [item['payload'] for item in combined_history[-3:]]
-                        previous_payloads = latest_payloads[-2::-1]
-                        
-                        payload_str = f"[bold yellow]{latest_payloads[-1]}[/]"
-                        if previous_payloads:
-                            history_str = ", ".join(previous_payloads)
-                            payload_str += f" [dim]({history_str})[/dim]"
-
-                    # MODE 1: Sender Addresses
-                    elif self.display_mode == 1:
-                        source_pa = latest_event.get('source_pa', '?')
-                        ga_event = latest_event.get('ga', '?')
-                        payload_str = f"[bold yellow]{current_payload}[/][dim] (from {source_pa} on {ga_event})[/dim]"
-
-                    # MODE 2: Sender Names
-                    elif self.display_mode == 2:
-                        source_pa = latest_event.get('source_pa', '?')
-                        ga_event = latest_event.get('ga', '?')
-                        
-                        pa_name = self.project_data.get('devices', {}).get(source_pa, {}).get('name', source_pa)
-                        ga_name = self.project_data.get('group_addresses', {}).get(ga_event, {}).get('name', ga_event)
-                        
-                        payload_str = f"[bold yellow]{current_payload}[/][dim] (from '{pa_name}' on '{ga_name}')[/dim]"
+                    payload_str = f"[bold yellow]{current_payload}[/]"
+                    if previous_payloads:
+                        history_str = ", ".join(previous_payloads)
+                        payload_str += f" [dim]({history_str})[/dim]"
                     
                     display_label = f"{original_name} -> {payload_str}"
         else:
             display_label = re.sub(r"^(\[[ *\-]] )+", "", node.label.plain)
 
-        # --- Step 2: Determine the selection prefix ---
         prefix = ""
         all_descendant_gas = self._get_descendant_gas(node)
         if all_descendant_gas:
@@ -595,10 +604,8 @@ class KNXExplorerApp(App):
             else: 
                 prefix = "[-] "
 
-        # --- Step 3: Assemble the final label ---
         node.set_label(prefix + display_label)
 
-        # --- Step 4: Recurse for all children ---
         for child in node.children:
             self._update_tree_labels_recursively(child)
 
@@ -609,86 +616,91 @@ class KNXExplorerApp(App):
             if not node: return
             descendant_gas = self._get_descendant_gas(node)
             if not descendant_gas: return
-
+            
+            node_label = re.sub(r"^(\[[ *\-]] )+", "", node.label.plain)
             if descendant_gas.issubset(self.selected_gas):
+                logging.info(f"Auswahl ENTFERNT für Knoten '{node_label}'. {len(descendant_gas)} GA(s) entfernt.")
                 self.selected_gas.difference_update(descendant_gas)
             else:
+                logging.info(f"Auswahl HINZUGEFÜGT für Knoten '{node_label}'. {len(descendant_gas)} GA(s) hinzugefügt.")
                 self.selected_gas.update(descendant_gas)
             
             for tree in self.query(Tree):
                 self._update_tree_labels_recursively(tree.root)
             
             if self.query_one(TabbedContent).active == "log_pane":
-                self.action_reload_log_file()
+                self._refilter_log_view()
 
         except Exception as e:
-            logging.error(f"Error in action_toggle_selection: {e}", exc_info=True)
-
-    def action_toggle_display_mode(self) -> None:
-        """Toggles the display mode for payloads in the tree (3 modes)."""
-        self.display_mode = (self.display_mode + 1) % 3
-        
-        modes = ["Payload History", "Sender Addresses", "Sender Names"]
-        self.notify(f"Display Mode: [bold]{modes[self.display_mode]}[/]", title="Display")
-
-        for tree in self.query(Tree):
-            if tree.root:
-                self._update_tree_labels_recursively(tree.root)
+            logging.error(f"Fehler bei action_toggle_selection: {e}", exc_info=True)
+            
+    def on_tabbed_content_tab_activated(self, event: TabbedContent.TabActivated) -> None:
+        """
+        Wird aufgerufen, wenn ein Tab gewechselt wird. Stellt sicher, dass die
+        Log-Ansicht immer aktuell ist, wenn sie ausgewählt wird.
+        """
+        if event.pane.id == "log_pane":
+            logging.info("Log-Ansicht-Tab wurde aktiviert. Wende aktuellen Filter neu an.")
+            self._refilter_log_view()
 
     def action_copy_label(self) -> None:
-        """Copies the clean name of the node (without prefix/payload) to the clipboard."""
+        """Kopiert die saubere Bezeichnung des Knotens (ohne Präfix/Payload) in die Zwischenablage."""
         try:
             active_tree = self.query_one(TabbedContent).active_pane.query_one(Tree)
             node = active_tree.cursor_node
             if node and node.data and "original_name" in node.data:
-                self.set_clipboard(node.data['original_name'])
-                self.notify(f"Copied: '{node.data['original_name']}'")
+                self.notify(f"Kopiert: '{node.data['original_name']}'")
             elif node:
                 label_text = node.label.plain
                 clean_label = re.sub(r"^(\[[ *\-]] )+", "", label_text)
-                clean_label = re.sub(r"\s*->\s*.*$", "", clean_label).strip()
-                self.set_clipboard(clean_label)
-                self.notify(f"Copied: '{clean_label}'")
+                clean_label = re.sub(r"\s*->\s*.*$", "", clean_label)
+                self.notify(f"Kopiert: '{clean_label}'")
         except Exception:
-            self.notify("Could not copy anything.", severity="error")
+            self.notify("Konnte nichts kopieren.", severity="error")
 
     def action_open_log_file(self) -> None:
         def handle_open_result(result: Tuple[str, bool]):
             path, should_save = result
             if not path:
-                self.notify("Open cancelled.", severity="warning")
+                self.notify("Öffnen abgebrochen.", severity="warning")
                 return
             
             if not os.path.exists(path):
-                self.notify(f"File not found: {path}", severity="error", timeout=5)
+                self.notify(f"Datei nicht gefunden: {path}", severity="error", timeout=5)
                 return
 
             self.config['log_file'] = path
-            self.notify(f"Log file opened: {os.path.basename(path)}")
+            self.notify(f"Log-Datei geöffnet: {os.path.basename(path)}")
 
             if should_save:
                 dotenv_path = find_dotenv() or Path(".env")
                 if not os.path.exists(dotenv_path): Path(dotenv_path).touch()
                 set_key(str(dotenv_path), "LOG_FILE", path, quote_mode="never")
-                self.notify("Path saved as new default.", severity="information")
+                self.notify("Pfad als neuen Standard gespeichert.", severity="information")
+                logging.info(f"Neuer Standard-Log-Pfad gespeichert: {path}")
 
-            self._update_log_view()
+            self._load_log_file_and_update_views()
         self.push_screen(OpenFileScreen(), handle_open_result)
 
     def action_reload_log_file(self) -> None:
-        self._update_log_view()
+        """Lädt die Log-Datei von der Festplatte neu (langsame Operation)."""
+        logging.info("Log-Datei wird manuell von Festplatte neu geladen.")
+        self._load_log_file_and_update_views()
     
     def action_toggle_log_reload(self) -> None:
         if self.log_reload_timer:
             self.log_reload_timer.stop()
             self.log_reload_timer = None
-            self.notify("Log Auto-Reload [bold red]OFF[/].", title="Log View")
+            self.notify("Log Auto-Reload [bold red]AUS[/].", title="Log Ansicht")
+            logging.info("Auto-Reload für Log-Datei deaktiviert.")
         else:
-            self.log_reload_timer = self.set_interval(1, self.action_reload_log_file)
-            self.notify("Log Auto-Reload [bold green]ON[/].", title="Log View")
+            self.log_reload_timer = self.set_interval(1, self._load_log_file_and_update_views)
+            self.notify("Log Auto-Reload [bold green]EIN[/].", title="Log Ansicht")
+            logging.info("Auto-Reload für Log-Datei im 1-Sekunden-Intervall aktiviert.")
 
     def _filter_tree_data(self, original_data: TreeData, filter_text: str) -> Tuple[Optional[TreeData], bool]:
         if not original_data: return None, False
+        
         node_name_to_check = original_data.get("data", {}).get("original_name") or original_data.get("name", "")
         is_direct_match = filter_text in node_name_to_check.lower()
 
@@ -721,13 +733,14 @@ class KNXExplorerApp(App):
             elif tabs.active == "ga_pane": original_data = self.ga_tree_data
             
             if original_data:
+                logging.info(f"Baumfilter für '{tabs.active}' wird zurückgesetzt.")
                 self._populate_tree_from_data(tree, original_data)
-                self.notify("Filter reset.")
+                self.notify("Filter zurückgesetzt.")
             else:
-                self.notify("Could not find original data for reset.", severity="warning")
+                self.notify("Konnte Originaldaten für Reset nicht finden.", severity="warning")
         except Exception as e:
-            logging.error(f"Error resetting filter: {e}", exc_info=True)
-            self.notify("No active tree found to reset.", severity="error")
+            logging.error(f"Fehler beim Zurücksetzen des Filters: {e}", exc_info=True)
+            self.notify("Kein aktiver Baum zum Zurücksetzen gefunden.", severity="error")
 
     def action_filter_tree(self) -> None:
         try:
@@ -735,7 +748,7 @@ class KNXExplorerApp(App):
             active_pane = tabs.active_pane
             tree = active_pane.query_one(Tree)
         except Exception:
-            self.notify("No active tree found to filter.", severity="error")
+            self.notify("Kein aktiver Baum zum Filtern gefunden.", severity="error")
             return
 
         def filter_callback(filter_text: str):
@@ -744,7 +757,9 @@ class KNXExplorerApp(App):
                 return
             
             lower_filter_text = filter_text.lower()
-            self.notify(f"Filtering tree with: '{filter_text}'...")
+            self.notify(f"Filtere Baum mit: '{filter_text}'...")
+            logging.info(f"Baumfilterung für Tab '{tabs.active}' gestartet mit Text: '{filter_text}'")
+            start_time = time.time()
 
             original_data = None
             if tabs.active == "building_pane": original_data = self.building_tree_data
@@ -752,13 +767,16 @@ class KNXExplorerApp(App):
             elif tabs.active == "ga_pane": original_data = self.ga_tree_data
             
             if not original_data:
-                self.notify("No data found to filter for this tab.", severity="error")
+                self.notify("Keine Daten zum Filtern für diesen Tab gefunden.", severity="error")
                 return
 
             filtered_data, has_matches = self._filter_tree_data(original_data, lower_filter_text)
             
+            duration = time.time() - start_time
+            logging.info(f"Baumfilterung abgeschlossen in {duration:.4f}s. Treffer gefunden: {has_matches}")
+
             if not has_matches:
-                self.notify(f"No matches found for '{filter_text}'.")
+                self.notify(f"Keine Treffer für '{filter_text}' gefunden.")
             
             self._populate_tree_from_data(tree, filtered_data or {}, expand_all=True)
 
@@ -768,10 +786,13 @@ class KNXExplorerApp(App):
 def main():
     try:
         logging.basicConfig(
-            level=logging.INFO, filename='knx_lens.log', filemode='w',
-            format='%(asctime)s - %(levelname)s - %(message)s', encoding='utf-8'
+            level=LOG_LEVEL, 
+            filename='knx_lens.log', 
+            filemode='w',
+            format='%(asctime)s - %(levelname)s - %(message)s', 
+            encoding='utf-8'
         )
-        logging.info("Application started.")
+        logging.info("Anwendung gestartet.")
 
         css_content = """
         #loading_label { width: 100%; height: 100%; content-align: center middle; padding: 1; }
@@ -784,10 +805,10 @@ def main():
         with open("knx-lens.css", "w") as f: f.write(css_content)
 
         load_dotenv()
-        parser = argparse.ArgumentParser(description="KNX Project Explorer and Log Filter.")
-        parser.add_argument("--path", help="Path to the .knxproj file (overrides .env)")
-        parser.add_argument("--log-file", help="Path to the log file for filtering (overrides .env)")
-        parser.add_argument("--password", help="Password for the project file (overrides .env)")
+        parser = argparse.ArgumentParser(description="KNX Projekt-Explorer und Log-Filter.")
+        parser.add_argument("--path", help="Pfad zur .knxproj Datei (überschreibt .env)")
+        parser.add_argument("--log-file", help="Pfad zur Log-Datei für die Filterung (überschreibt .env)")
+        parser.add_argument("--password", help="Passwort für die Projektdatei (überschreibt .env)")
         args = parser.parse_args()
 
         config = {
@@ -798,15 +819,15 @@ def main():
         }
 
         if not config['knxproj_path']:
-            logging.critical("Project path not found.")
-            print("ERROR: Project path not found. Please set it in .env or specify with --path.", file=sys.stderr)
+            logging.critical("Projektpfad nicht gefunden.")
+            print("FEHLER: Projektpfad nicht gefunden. Bitte 'setup.py' ausführen oder mit --path angeben.", file=sys.stderr)
             sys.exit(1)
         
         app = KNXExplorerApp(config=config)
         app.run()
 
     except Exception:
-        logging.critical("Unhandled error in main() function", exc_info=True)
+        logging.critical("Unbehandelter Fehler in der main() Funktion", exc_info=True)
         traceback.print_exc(file=sys.stderr)
         sys.exit(1)
 
