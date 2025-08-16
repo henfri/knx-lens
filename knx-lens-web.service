@@ -1,0 +1,26 @@
+[Unit]
+Description=KNX Lens Web Service
+After=network.target
+
+[Service]
+# IMPORTANT: Replace 'your_user' and 'your_group' with your actual username and group.
+# You can find your username by typing 'whoami' in the terminal.
+# The group is usually the same as the username.
+User=your_user
+Group=your_group
+
+# IMPORTANT: Replace '/path/to/knx-lens-suite' with the absolute path to the directory
+# where your knx-lens scripts and the .env file are located.
+WorkingDirectory=/path/to/knx-lens-suite
+Environment=PATH=/path/to/knx-lens/.venv/bin
+
+# IMPORTANT: The path to the python executable inside your virtual environment.
+# It should be '/path/to/knx-lens-suite/.venv/bin/python'.
+ExecStart=/path/to/knx-lens-suite/.venv/bin/python /path/to/knx-lens-suite/knx-lens-web.py --daemon
+
+# Restart the service if it fails
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
