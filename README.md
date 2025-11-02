@@ -96,7 +96,7 @@ python setup.py
 The script will guide you through the following steps:
 
 * Selecting the gateway mode (save a specific gateway or search on every start).
-* Scanning the network for gateways.
+* Scanning the network for gateways (Linux only. Windows and MacOS not working for scanning due to underlying lib)
 * Choosing a gateway.
 * Specifying the directory where the `knx_bus.log` files should be saved.
 
