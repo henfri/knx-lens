@@ -139,6 +139,7 @@ def telegram_to_log_message(telegram: Telegram, knx_project: Optional[KNXProject
         "data": 25      # Gekürzt von 50
     }
     # Erzeugt eine saubere, mit Pipe getrennte Zeile
+    # --- KORREKTUR: Doppelte "data_str" Zeile entfernt ---
     line = (
         f"{timestamp:<{col_widths['timestamp']}} | "
         f"{ia_string[:col_widths['ia_string']]:<{col_widths['ia_string']}} | "
@@ -147,6 +148,7 @@ def telegram_to_log_message(telegram: Telegram, knx_project: Optional[KNXProject
         f"{ga_name[:col_widths['ga_name']]:<{col_widths['ga_name']}} | "
         f"{data_str[:col_widths['data']]:<{col_widths['data']}}"
     )
+    # --- ENDE KORREKTUR ---
     return line
 
 def load_project(file_path: str, password: Optional[str]) -> Optional[KNXProject]:
@@ -297,3 +299,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+    

@@ -63,8 +63,12 @@ KNX-Lens is tested in Linux and Windows.
 * **Multi-User Capable**: Multiple users can access the explorer simultaneously through the browser
 * **Simple Start**: A single script starts the server and makes the application available on the local network.
 
-## Installation
+## Installation via Docker
+Adopt the Paths in compose.yaml and create an .env in the same folder starting from .env.docker.example 
+Copy your project-file to the folder specified in KNX_PROJECT_PATH. Ensure that the folder permissions are permitting write access to both the log and the project folder.
+Start the stack.
 
+## Installation without Docker
 The tools require Python 3.10 or higher. Linux and Windows are tested.
 
 1.  **Clone or download the repository**:

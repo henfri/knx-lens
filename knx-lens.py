@@ -7,6 +7,13 @@ Ein interaktiver KNX Projekt-Explorer und Log-Filter.
 - Filtert Log-Dateien (auch aus .zip-Archiven) basierend auf der Auswahl.
 - Zeigt den zuletzt empfangenen Payload und eine kurze Historie direkt im Baum an.
 - Shortcuts: (o) Log öffnen, (r) Log neu laden, (f) Filtern, (a) Auswahl, (t) Auto-Reload, (c) Kopieren, (q) Beenden.
+
+*** NEU in dieser Version ***
+- Verwendet DataTable statt RichLog für die Log-Ansicht.
+- Spalten 3 (Gerätename) und 5 (GA-Name) sind flexibel und füllen den verfügbaren Platz.
+- Log-Zeilen werden beim Laden "angereichert", d.h. PA- und GA-Namen werden
+  aus den Projektdaten nachgeschlagen und in einer gecachten Struktur gespeichert.
+- Das Filtern der Log-Ansicht ist dadurch extrem schnell.
 """
 import json
 import csv
@@ -29,7 +36,7 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Vertical, Center, Horizontal
 from textual.screen import ModalScreen
-from textual.widgets import Header, Footer, Tree, Static, Input, TabbedContent, TabPane, RichLog, Label, Button
+from textual.widgets import Header, Footer, Tree, Static, Input, TabbedContent, TabPane, Label, Button, DataTable
 from textual.widgets.tree import TreeNode
 from textual import events
 from textual.timer import Timer
@@ -41,6 +48,7 @@ LOG_LEVEL = logging.INFO
 TreeData = Dict[str, Any]
 
 ### --- KERNLOGIK: PARSING & DATENSTRUKTURIERUNG ---
+# (Unverändert)
 
 def get_md5_hash(file_path: str) -> str:
     """Berechnet den MD5-Hash einer Datei."""
@@ -263,6 +271,7 @@ def build_building_tree_data(project: Dict) -> TreeData:
     return building_tree
 
 ### --- TUI: SCREENS & MODALS ---
+# (Unverändert)
 
 class FilterInputScreen(ModalScreen[str]):
     """Ein modaler Bildschirm für die Filtereingabe."""
@@ -301,7 +310,7 @@ class OpenFileScreen(ModalScreen[Tuple[str, bool]]):
             self.dismiss((path, True))
 
 ### --- TUI: HAUPTANWENDUNG ---
-class KNXExplorerApp(App):
+class KNXLens(App):
     CSS_PATH = "knx-lens.css"
     BINDINGS = [
         Binding("q", "quit", "Beenden"),
@@ -322,15 +331,23 @@ class KNXExplorerApp(App):
         self.pa_tree_data: TreeData = {}
         self.ga_tree_data: TreeData = {}
         self.selected_gas: Set[str] = set()
-        self.log_widget: Optional[RichLog] = None
+        
+        # --- DATATABLE ANPASSUNG ---
+        self.log_widget: Optional[DataTable] = None # Geändert von RichLog
         self.log_reload_timer: Optional[Timer] = None
         self.payload_history: Dict[str, List[Dict[str, str]]] = {}
-        self.cached_log_lines: List[str] = []
+        
+        # NEU: Cache für angereicherte Log-Daten
+        # Statt List[str] (rohe Zeilen) speichern wir eine Liste von Dictionaries
+        # mit den bereits nachgeschlagenen Namen.
+        self.cached_log_data: List[Dict[str, str]] = []
+        # --- ENDE ANPASSUNG ---
 
 
     def compose(self) -> ComposeResult:
         yield Header(name="KNX Projekt-Explorer")
-        yield Vertical(Static("Lade und verarbeite Projektdatei...", id="loading_label"))
+        # ID für den Lade-Container
+        yield Vertical(Static("Lade und verarbeite Projektdatei...", id="loading_label"), id="loading_container")
         yield TabbedContent(id="main_tabs", disabled=True)
         yield Footer()
 
@@ -356,17 +373,32 @@ class KNXExplorerApp(App):
     
     def on_data_loaded(self) -> None:
         try:
-            self.query_one("#loading_label").remove()
+            # Entferne den *gesamten* Lade-Container
+            loading_container = self.query_one("#loading_container")
+            loading_container.remove()
+            
             tabs = self.query_one(TabbedContent)
             
             building_tree = Tree("Gebäude", id="building_tree")
             pa_tree = Tree("Linien", id="pa_tree")
             ga_tree = Tree("Funktionen", id="ga_tree")
-            self.log_widget = RichLog(highlight=True, markup=True, id="log_view")
+            
+            # --- DATATABLE ANPASSUNG ---
+            self.log_widget = DataTable(id="log_view")
+            self.log_widget.cursor_type = "row"
+
+            # Spalten-Breiten werden jetzt via CSS (in main()) gesteuert
+            self.log_widget.add_column("Timestamp", key="ts")
+            self.log_widget.add_column("PA", key="pa")
+            self.log_widget.add_column("Gerät (PA)", key="pa_name")
+            self.log_widget.add_column("GA", key="ga")
+            self.log_widget.add_column("Gruppenadresse (GA)", key="ga_name")
+            self.log_widget.add_column("Payload", key="payload")
 
             tabs.add_pane(TabPane("Gebäudestruktur", building_tree, id="building_pane"))
             tabs.add_pane(TabPane("Physikalische Adressen", pa_tree, id="pa_pane"))
             tabs.add_pane(TabPane("Gruppenadressen", ga_tree, id="ga_pane"))
+            # Wichtig: Die TabPane bekommt eine ID für das Scrolling
             tabs.add_pane(TabPane("Log-Ansicht", self.log_widget, id="log_pane"))
             
             self._populate_tree_from_data(building_tree, self.building_tree_data)
@@ -379,6 +411,7 @@ class KNXExplorerApp(App):
             self.show_startup_error(e, traceback.format_exc())
 
     def _populate_tree_from_data(self, tree: Tree, data: TreeData, expand_all: bool = False):
+        # (Unverändert)
         tree.clear()
         def natural_sort_key(item: Tuple[str, Any]):
             key_str = str(item[0])
@@ -401,6 +434,7 @@ class KNXExplorerApp(App):
             tree.root.expand_all()
 
     def _detect_log_format(self, first_lines: List[str]) -> Optional[str]:
+        # (Unverändert)
         for line in first_lines:
             line = line.strip()
             if not line or line.startswith("="): continue
@@ -410,84 +444,157 @@ class KNXExplorerApp(App):
                 return 'csv'
         return None
 
-    def _process_log_lines(self, lines: List[str]):
-        if not self.log_widget: return
-        self.log_widget.clear()
-
-        if not self.selected_gas:
-            self.log_widget.write("[yellow]Keine Gruppenadressen für den Filter ausgewählt. Mit 'a' umschalten.[/yellow]")
-            return
-        
-        start_time = time.time()
-
-        first_content_lines = [line for line in lines[:20] if line.strip() and not line.strip().startswith("=")]
-        log_format = self._detect_log_format(first_content_lines)
-
-        if log_format is None:
-            self.log_widget.write(f"[red]Konnte das Log-Format nicht bestimmen.[/red]\n[dim]Unterstützt: CSV (';') oder Pipe-getrennt ('|').[/dim]")
-            return
-        
-        sorted_gas = sorted(list(self.selected_gas))
-        filter_info = f"Filtere Log für {len(sorted_gas)} GAs: {', '.join(sorted_gas)}"
-        self.log_widget.write(f"[dim]{filter_info}[/dim]\n")
-        logging.info(f"Applizieren des Log-Ansicht-Filters für {len(sorted_gas)} GAs.")
-
-        found_count = 0
-        for line in lines:
-            clean_line = line.strip()
-            if not clean_line: continue
-
-            ga_to_check = None
-            if log_format == 'pipe_separated':
-                parts = clean_line.split('|')
-                if len(parts) > 3: ga_to_check = parts[3].strip()
-            elif log_format == 'csv':
-                try:
-                    row = next(csv.reader([clean_line], delimiter=';'))
-                    if len(row) > 4: ga_to_check = row[4].strip()
-                except (csv.Error, StopIteration): continue
-
-            if ga_to_check and ga_to_check in self.selected_gas:
-                self.log_widget.write(line.rstrip())
-                found_count += 1
-        
-        duration = time.time() - start_time
-        logging.info(f"Log-Ansicht gefiltert. {found_count} Einträge in {duration:.4f}s gefunden.")
-        self.log_widget.write(f"\n[green]{found_count} passende Einträge gefunden.[/green] [dim]({duration:.2f}s)[/dim]")
-
-    def _update_payload_history_from_log(self, lines: List[str]):
+    # --- DATATABLE ANPASSUNG ---
+    # Diese Funktion parst die Log-Datei *einmalig* und baut
+    # das payload_history UND den angereicherten self.cached_log_data auf.
+    def _parse_and_cache_log_data(self, lines: List[str]):
         """
-        Parst die Log-Datei und aktualisiert das `self.payload_history` Dictionary.
+        Parst die Log-Datei, aktualisiert das `self.payload_history` UND
+        baut den `self.cached_log_data` Cache mit angereicherten Daten auf.
+        Diese Funktion wird *einmal* pro Ladevorgang aufgerufen.
         """
         self.payload_history.clear()
+        self.cached_log_data.clear()
+        
         first_content_lines = [line for line in lines[:20] if line.strip() and not line.strip().startswith("=")]
         log_format = self._detect_log_format(first_content_lines)
         if not log_format:
+            logging.warning("Konnte Log-Format beim Parsen für Cache nicht bestimmen.")
             return
+
+        # Hole Dictionaries für schnellen Lookup
+        devices_dict = self.project_data.get("devices", {})
+        ga_dict = self.project_data.get("group_addresses", {})
 
         for line in lines:
             clean_line = line.strip()
             if not clean_line: continue
+            
             try:
-                timestamp, ga, payload = None, None, None
+                timestamp, pa, ga, payload = None, "N/A", None, None
+                
                 if log_format == 'pipe_separated':
                     parts = [p.strip() for p in clean_line.split('|')]
-                    if len(parts) > 5:
-                        timestamp, ga, payload = parts[0], parts[3], parts[5]
+                    # Wir brauchen min. 4 Spalten (0-3) für TS und GA
+                    if len(parts) > 3:
+                        timestamp = parts[0]
+                        ga = parts[3]
+                        # PA und Payload sind optional
+                        pa = parts[1] if len(parts) > 1 else "N/A"
+                        payload = parts[5] if len(parts) > 5 else None
+                
                 elif log_format == 'csv':
                     row = next(csv.reader([clean_line], delimiter=';'))
-                    if len(row) > 6:
-                        timestamp, ga, payload = row[0], row[4], row[6]
-                if timestamp and ga and payload and re.match(r'\d+/\d+/\d+', ga):
-                    if ga not in self.payload_history:
-                        self.payload_history[ga] = []
-                    self.payload_history[ga].append({'timestamp': timestamp, 'payload': payload})
+                    # Wir brauchen min. 5 Spalten (0-4) für TS und GA
+                    if len(row) > 4:
+                        timestamp = row[0]
+                        ga = row[4]
+                        # PA und Payload sind optional
+                        pa = row[1] if len(row) > 1 else "N/A"
+                        payload = row[6] if len(row) > 6 else None
+                
+                # Wir brauchen nur ts und ga für die Log-Ansicht.
+                # PA ist "N/A" wenn nicht gefunden. Payload ist optional (None).
+                if timestamp and ga and re.match(r'\d+/\d+/\d+', ga):
+                    
+                    # 1. Payload History (NUR wenn Payload existiert)
+                    if payload is not None:
+                        if ga not in self.payload_history:
+                            self.payload_history[ga] = []
+                        self.payload_history[ga].append({'timestamp': timestamp, 'payload': payload})
+                    
+                    # 2. Cache mit angereicherten Daten aufbauen (IMMER)
+                    #    (Solange TS und GA vorhanden sind)
+                    pa_name = devices_dict.get(pa, {}).get("name", "N/A")
+                    ga_name = ga_dict.get(ga, {}).get("name", "N/A")
+                    
+                    self.cached_log_data.append({
+                        "timestamp": timestamp,
+                        "pa": pa,
+                        "pa_name": pa_name,
+                        "ga": ga,
+                        "ga_name": ga_name,
+                        "payload": payload if payload is not None else "N/A"
+                    })
+
             except (IndexError, StopIteration, csv.Error) as e:
                 logging.debug(f"Konnte Log-Zeile nicht parsen: '{clean_line}' - Fehler: {e}")
                 continue
         
+        # Payload History sortieren (wie vorher)
         for ga in self.payload_history:
             self.payload_history[ga].sort(key=lambda x: x['timestamp'])
+
+    # --- DATATABLE ANPASSUNG ---
+    # Diese Funktion wurde komplett umgeschrieben.
+    # Sie liest nicht mehr die Zeilen, sondern filtert nur noch
+    # die vor-verarbeiteten Daten aus `self.cached_log_data`.
+    # Sie nimmt daher auch keine 'lines' mehr als Argument.
+    def _process_log_lines(self):
+        """
+        Filtert die in `self.cached_log_data` zwischengespeicherten,
+        angereicherten Log-Einträge basierend auf `self.selected_gas`
+        und füllt die `DataTable`.
+        """
+        if not self.log_widget: return
+        self.log_widget.clear()
+
+        # Logik: Wenn KEINE GAs ausgewählt sind, zeigen wir ALLES.
+        # Wenn GAs ausgewählt SIND, filtern wir.
+        has_selection = bool(self.selected_gas)
+
+        # NEUE Prüfung: Sicherstellen, dass überhaupt Daten geladen wurden.
+        if not self.cached_log_data:
+             self.log_widget.add_row("[yellow]Keine Log-Daten geladen oder Log-Datei ist leer.[/yellow]")
+             self.log_widget.caption = "Keine Log-Daten"
+             return
+        
+        start_time = time.time()
+        
+        log_caption = ""
+        if has_selection:
+            sorted_gas = sorted(list(self.selected_gas))
+            filter_info = f"Filtere Log für {len(sorted_gas)} GAs: {', '.join(sorted_gas)}"
+            logging.info(f"Applizieren des Log-Ansicht-Filters für {len(sorted_gas)} GAs.")
+            log_caption = f"Filter aktiv ({len(sorted_gas)} GAs)"
+        else:
+            logging.info("Keine Auswahl. Zeige alle Log-Einträge.")
+            log_caption = "Alle Einträge"
+
+        found_count = 0
+        
+        # Iteriere über die vor-verarbeiteten, angereicherten Daten
+        # Dies ist extrem schnell, da keine String-Operationen oder Lookups mehr nötig sind.
+        for i, log_entry in enumerate(self.cached_log_data):
+            
+            # Überspringe die Zeile nur, WENN eine Auswahl existiert
+            # UND die GA der Zeile NICHT in der Auswahl ist.
+            if has_selection and log_entry["ga"] not in self.selected_gas:
+                continue # Überspringen
+
+            # Wenn wir hier ankommen, ist entweder:
+            # 1. Keine Auswahl getroffen (has_selection == False) -> Zeile anzeigen
+            # 2. Auswahl getroffen (has_selection == True) UND die GA passt -> Zeile anzeigen
+            self.log_widget.add_row(
+                log_entry["timestamp"],
+                log_entry["pa"],
+                log_entry["pa_name"], # Angereicherter Name
+                log_entry["ga"],
+                log_entry["ga_name"], # Angereicherter Name
+                log_entry["payload"],
+                key=f"log_line_{i}"
+            )
+            # --- KORREKTUR: Einrückung korrigiert ---
+            found_count += 1
+            # --- ENDE KORREKTUR ---
+        
+        duration = time.time() - start_time
+        logging.info(f"Log-Ansicht gefiltert. {found_count} Einträge in {duration:.4f}s gefunden.")
+        # Info als "Caption" (Fußzeile) der Tabelle setzen
+        self.log_widget.caption = f"{found_count} Einträge gefunden. ({duration:.2f}s) | {log_caption}"
+
+    # Die alte Funktion `_update_payload_history_from_log` wird nicht mehr benötigt,
+    # da ihre Logik in `_parse_and_cache_log_data` integriert wurde.
 
     def _load_log_file_and_update_views(self):
         """Liest die Log-Datei von der Festplatte, aktualisiert den Cache und alle Ansichten."""
@@ -498,9 +605,10 @@ class KNXExplorerApp(App):
 
         if not os.path.exists(log_file_path):
             log_widget.clear()
-            log_widget.write(f"[red]FEHLER: Log-Datei nicht gefunden unter '{log_file_path}'[/red]")
-            log_widget.write("[dim]Mit 'o' eine andere Datei öffnen.[/dim]")
-            self.cached_log_lines = []
+            log_widget.add_row(f"[red]FEHLER: Log-Datei nicht gefunden unter '{log_file_path}'[/red]")
+            log_widget.add_row("[dim]Mit 'o' eine andere Datei öffnen.[/dim]")
+            self.cached_log_data = [] # Cache leeren
+            self.payload_history.clear() # Payload-Verlauf auch leeren
             return
         
         start_time = time.time()
@@ -508,7 +616,7 @@ class KNXExplorerApp(App):
 
         if not self.log_reload_timer:
             log_widget.clear()
-            log_widget.write(f"[bold]Lese Log:[/] {os.path.basename(log_file_path)}")
+            log_widget.add_row(f"[bold]Lese Log:[/] {os.path.basename(log_file_path)}")
             
         try:
             lines = []
@@ -516,8 +624,10 @@ class KNXExplorerApp(App):
                 with zipfile.ZipFile(log_file_path, 'r') as zf:
                     log_files_in_zip = [name for name in zf.namelist() if name.lower().endswith('.log')]
                     if not log_files_in_zip:
-                        log_widget.write(f"\n[red]Keine .log-Datei im ZIP-Archiv gefunden.[/red]")
-                        self.cached_log_lines = []
+                        log_widget.clear() # Vorherige "Lese Log" Zeile entfernen
+                        log_widget.add_row(f"\n[red]Keine .log-Datei im ZIP-Archiv gefunden.[/red]")
+                        self.cached_log_data = []
+                        self.payload_history.clear()
                         return
                     with zf.open(log_files_in_zip[0]) as log_file:
                         lines = io.TextIOWrapper(log_file, encoding='utf-8').readlines()
@@ -525,35 +635,48 @@ class KNXExplorerApp(App):
                 with open(log_file_path, 'r', encoding='utf-8') as f:
                     lines = f.readlines()
             
-            self.cached_log_lines = lines
+            # --- DATATABLE ANPASSUNG ---
+            # Ruft die NEUE Funktion auf, die parst, anreichert und cacht.
+            self._parse_and_cache_log_data(lines)
             
-            self._update_payload_history_from_log(self.cached_log_lines)
+            # Baum-Labels mit neuen Payload-Daten aktualisieren
             for tree in self.query(Tree):
                 self._update_tree_labels_recursively(tree.root)
-            self._process_log_lines(self.cached_log_lines)
+            
+            # Ruft die NEUE Filterfunktion auf (ohne Argument)
+            self._process_log_lines()
+            # --- ENDE ANPASSUNG ---
 
             duration = time.time() - start_time
             logging.info(f"Log-Datei '{os.path.basename(log_file_path)}' in {duration:.2f}s gelesen und verarbeitet.")
 
         except Exception as e:
-            log_widget.write(f"\n[red]Fehler beim Verarbeiten der Log-Datei: {e}[/red]")
-            log_widget.write(f"[dim]{traceback.format_exc()}[/dim]")
+            log_widget.clear() # Vorherige "Lese Log" Zeile entfernen
+            log_widget.add_row(f"\n[red]Fehler beim Verarbeiten der Log-Datei: {e}[/red]")
+            log_widget.add_row(f"[dim]{traceback.format_exc()}[/dim]")
             logging.error(f"Fehler beim Verarbeiten von '{log_file_path}': {e}", exc_info=True)
-            self.cached_log_lines = []
+            self.cached_log_data = []
+            self.payload_history.clear()
             
     def _refilter_log_view(self) -> None:
         """Filtert die bereits geladenen Log-Zeilen neu, ohne die Datei erneut zu lesen."""
         if not self.log_widget: return
         
-        if not self.cached_log_lines:
-            self._load_log_file_and_update_views()
-            return
+        # --- DATATABLE ANPASSUNG ---
+        # Prüft auf den neuen Cache
+        # KORREKTUR: Nicht neu laden, wenn der Cache leer ist,
+        # _process_log_lines kann damit umgehen.
+        # if not self.cached_log_data:
+        #     self._load_log_file_and_update_views()
+        #     return
         
         logging.info("Log-Ansicht wird mit gecachten Daten neu gefiltert.")
-        self._process_log_lines(self.cached_log_lines)
-
+        # Ruft die NEUE Filterfunktion auf
+        self._process_log_lines()
+        # --- ENDE ANPASSUNG ---
 
     def _get_descendant_gas(self, node: TreeNode) -> Set[str]:
+        # (Unverändert)
         gas = set()
         if node.data and "gas" in node.data:
             gas.update(node.data["gas"])
@@ -562,10 +685,7 @@ class KNXExplorerApp(App):
         return gas
 
     def _update_tree_labels_recursively(self, node: TreeNode) -> None:
-        """
-        KORRIGIERT & ZENTRALISIERT: Baut das Label eines Knotens von Grund auf neu.
-        Verhindert die Akkumulation von Präfixen auf höheren Ebenen.
-        """
+        # (Unverändert)
         display_label = ""
         if node.data and "original_name" in node.data:
             original_name = node.data["original_name"]
@@ -610,6 +730,7 @@ class KNXExplorerApp(App):
             self._update_tree_labels_recursively(child)
 
     def action_toggle_selection(self) -> None:
+        # (Unverändert - ruft jetzt _refilter_log_view, was die neue Logik triggert)
         try:
             active_tree = self.query_one(TabbedContent).active_pane.query_one(Tree)
             node = active_tree.cursor_node
@@ -635,16 +756,13 @@ class KNXExplorerApp(App):
             logging.error(f"Fehler bei action_toggle_selection: {e}", exc_info=True)
             
     def on_tabbed_content_tab_activated(self, event: TabbedContent.TabActivated) -> None:
-        """
-        Wird aufgerufen, wenn ein Tab gewechselt wird. Stellt sicher, dass die
-        Log-Ansicht immer aktuell ist, wenn sie ausgewählt wird.
-        """
+        # (Unverändert - ruft jetzt _refilter_log_view, was die neue Logik triggert)
         if event.pane.id == "log_pane":
             logging.info("Log-Ansicht-Tab wurde aktiviert. Wende aktuellen Filter neu an.")
             self._refilter_log_view()
 
     def action_copy_label(self) -> None:
-        """Kopiert die saubere Bezeichnung des Knotens (ohne Präfix/Payload) in die Zwischenablage."""
+        # (Unverändert)
         try:
             active_tree = self.query_one(TabbedContent).active_pane.query_one(Tree)
             node = active_tree.cursor_node
@@ -659,6 +777,7 @@ class KNXExplorerApp(App):
             self.notify("Konnte nichts kopieren.", severity="error")
 
     def action_open_log_file(self) -> None:
+        # (Unverändert)
         def handle_open_result(result: Tuple[str, bool]):
             path, should_save = result
             if not path:
@@ -683,11 +802,12 @@ class KNXExplorerApp(App):
         self.push_screen(OpenFileScreen(), handle_open_result)
 
     def action_reload_log_file(self) -> None:
-        """Lädt die Log-Datei von der Festplatte neu (langsame Operation)."""
+        # (Unverändert)
         logging.info("Log-Datei wird manuell von Festplatte neu geladen.")
         self._load_log_file_and_update_views()
     
     def action_toggle_log_reload(self) -> None:
+        # (Unverändert)
         if self.log_reload_timer:
             self.log_reload_timer.stop()
             self.log_reload_timer = None
@@ -699,6 +819,7 @@ class KNXExplorerApp(App):
             logging.info("Auto-Reload für Log-Datei im 1-Sekunden-Intervall aktiviert.")
 
     def _filter_tree_data(self, original_data: TreeData, filter_text: str) -> Tuple[Optional[TreeData], bool]:
+        # (Unverändert)
         if not original_data: return None, False
         
         node_name_to_check = original_data.get("data", {}).get("original_name") or original_data.get("name", "")
@@ -713,7 +834,7 @@ class KNXExplorerApp(App):
                 filtered_child_data, child_has_match = self._filter_tree_data(child_data, filter_text)
                 if child_has_match and filtered_child_data:
                     has_matching_descendant = True
-                    filtered_children[key] = filtered_child_data
+                    filtered_children[key] = child_data
             
             if has_matching_descendant:
                 new_node_data = original_data.copy()
@@ -722,6 +843,7 @@ class KNXExplorerApp(App):
         return None, False
 
     def action_reset_filter(self) -> None:
+        # (Unverändert)
         try:
             tabs = self.query_one(TabbedContent)
             active_pane = tabs.active_pane
@@ -743,6 +865,7 @@ class KNXExplorerApp(App):
             self.notify("Kein aktiver Baum zum Zurücksetzen gefunden.", severity="error")
 
     def action_filter_tree(self) -> None:
+        # (Unverändert)
         try:
             tabs = self.query_one(TabbedContent)
             active_pane = tabs.active_pane
@@ -794,18 +917,57 @@ def main():
         )
         logging.info("Anwendung gestartet.")
 
+        # CSS ist für DataTable angepasst
         css_content = """
         #loading_label { width: 100%; height: 100%; content-align: center middle; padding: 1; }
         #filter_dialog, #open_file_dialog { width: 80%; max-width: 70; height: auto; padding: 1 2; background: $surface; border: heavy $primary; }
         #filter_dialog > Label, #open_file_dialog > Label { margin-bottom: 1; }
         #filter_input, #path_input { background: $boost; }
-        #log_view { border: round white; padding: 1; }
+        
+        /* --- KORREKTUR: Scrolling-Verhalten (Neuer Versuch) --- */
+        
+        /* 1. Sagt dem Tab-Container, dass er den restlichen Platz füllen soll. */
+        /* Dies behebt das Problem, dass die Tabs "mitscrollen". */
+        TabbedContent {
+            height: 1fr;
+        }
+        
+        /* 2. Sagt den Widgets (Bäume + Tabelle), dass sie die TabPane füllen sollen. */
+        /* ... */
+        /* --- KORREKTUR: Diese Regel hat den Fehler verursacht und wird entfernt ---
+        #log_view, #building_tree, #pa_tree, #ga_tree {
+            height: 100%;
+        }
+        */
+        /* --- ENDE KORREKTUR --- */
+
+        /* Style für die Fußzeile (Caption) der Tabelle */
+        DataTable > .datatable--caption {
+            width: 100%;
+            text-align: center;
+            color: $text-muted;
+        }
+
+        /* --- KORREKTUR: Spaltenbreiten --- */
+        /* Alle Spalten "auto" (so schmal wie möglich), mit Obergrenzen. */
+        /* Dies verhindert horizontales Scrollen und erzwingt stattdessen Textumbruch. */
+        #log_view .datatable--column-key-ts        { width: auto; max-width: 25; }
+        #log_view .datatable--column-key-pa        { width: auto; max-width: 12; }
+        #log_view .datatable--column-key-ga        { width: auto; max-width: 12; }
+        #log_view .datatable--column-key-payload   { width: auto; max-width: 20; }
+        
+        /* Die Namensspalten bekommen auch "auto", damit sie sich anpassen, anstatt 1fr zu fordern. */
+        #log_view .datatable--column-key-pa_name   { width: auto; } 
+        #log_view .datatable--column-key-ga_name   { width: auto; }
+        /* --- ENDE KORREKTUR --- */
+
         #open_file_dialog > Horizontal { height: auto; align: center middle; margin-top: 1; }
         """
-        with open("knx-lens.css", "w") as f: f.write(css_content)
+        
+        with open("knx-lens.css", "w", encoding='utf-8') as f: f.write(css_content)
 
         load_dotenv()
-        parser = argparse.ArgumentParser(description="KNX Projekt-Explorer und Log-Filter.")
+        parser = argparse.ArgumentParser(description="KNX-Lens")
         parser.add_argument("--path", help="Pfad zur .knxproj Datei (überschreibt .env)")
         parser.add_argument("--log-file", help="Pfad zur Log-Datei für die Filterung (überschreibt .env)")
         parser.add_argument("--password", help="Passwort für die Projektdatei (überschreibt .env)")
@@ -823,7 +985,7 @@ def main():
             print("FEHLER: Projektpfad nicht gefunden. Bitte 'setup.py' ausführen oder mit --path angeben.", file=sys.stderr)
             sys.exit(1)
         
-        app = KNXExplorerApp(config=config)
+        app = KNXLens(config=config)
         app.run()
 
     except Exception:

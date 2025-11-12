@@ -15,3 +15,6 @@ __pycache__/
 *.log
 *.zip
 .env.bkup
+textual.txt
+ets.py
+modbus_huawei.py

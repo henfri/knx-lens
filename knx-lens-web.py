@@ -33,22 +33,32 @@ load_dotenv()
 
 # Versucht, die IP-Adresse aus der .env-Datei zu lesen
 # os.getenv() gibt None zurück, wenn die Variable nicht gesetzt ist
-webserver_ip = os.getenv("WEBSERVER_IP")
+webserver_ip   = os.getenv("WEBSERVER_IP")
+webserver_port = os.getenv("WEBSERVER_PORT")
 
 # Prüft, ob eine IP in der .env-Datei konfiguriert wurde
 if webserver_ip:
+    webserver_ip=int(webserver_ip)
     print(f"IP-Adresse aus .env-Datei geladen: {webserver_ip}")
-    lokale_ip = webserver_ip
 else:
     # Wenn nicht, wird die IP automatisch ermittelt
-    lokale_ip = get_local_ip()
-    print(f"IP-Adresse automatisch ermittelt: {lokale_ip}. Falls eine andere IP genutzt werden soll, setzen Sie WEBSERVER_IP in der .env-Datei.")
+    webserver_ip = get_local_ip()
+    print(f"IP-Adresse automatisch ermittelt: {webserver_ip}. Falls eine andere IP genutzt werden soll, setzen Sie WEBSERVER_IP in der .env-Datei.")
+
+if webserver_port:
+    webserver_port=int(webserver_port)
+    print(f"Port aus .env-Datei geladen: {webserver_port}")
+else:
+    webserver_port = 8000
+    print(f"Default Port gewählt: 8000")
 
 # Der Server wird mit der ermittelten oder konfigurierten IP gestartet
 print("-" * 30)
 server = Server("python -m knx-lens")
-server.host = lokale_ip
+server.host = webserver_ip
+server.port = webserver_port
+server.title = "KNX-Lens"
 # Stellt sicher, dass die Portnummer im String enthalten ist
-server.public_url = f"http://{lokale_ip}:8000" 
+server.public_url = f"http://{webserver_ip}:{webserver_port}"
 server.serve()
 print("-" * 30)

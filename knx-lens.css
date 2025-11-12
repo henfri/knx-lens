@@ -3,6 +3,43 @@
         #filter_dialog, #open_file_dialog { width: 80%; max-width: 70; height: auto; padding: 1 2; background: $surface; border: heavy $primary; }
         #filter_dialog > Label, #open_file_dialog > Label { margin-bottom: 1; }
         #filter_input, #path_input { background: $boost; }
-        #log_view { border: round white; padding: 1; }
+        
+        /* --- KORREKTUR: Scrolling-Verhalten (Neuer Versuch) --- */
+        
+        /* 1. Sagt dem Tab-Container, dass er den restlichen Platz füllen soll. */
+        /* Dies behebt das Problem, dass die Tabs "mitscrollen". */
+        TabbedContent {
+            height: 1fr;
+        }
+        
+        /* 2. Sagt den Widgets (Bäume + Tabelle), dass sie die TabPane füllen sollen. */
+        /* ... */
+        /* --- KORREKTUR: Diese Regel hat den Fehler verursacht und wird entfernt ---
+        #log_view, #building_tree, #pa_tree, #ga_tree {
+            height: 100%;
+        }
+        */
+        /* --- ENDE KORREKTUR --- */
+
+        /* Style für die Fußzeile (Caption) der Tabelle */
+        DataTable > .datatable--caption {
+            width: 100%;
+            text-align: center;
+            color: $text-muted;
+        }
+
+        /* --- KORREKTUR: Spaltenbreiten --- */
+        /* Alle Spalten "auto" (so schmal wie möglich), mit Obergrenzen. */
+        /* Dies verhindert horizontales Scrollen und erzwingt stattdessen Textumbruch. */
+        #log_view .datatable--column-key-ts        { width: auto; max-width: 25; }
+        #log_view .datatable--column-key-pa        { width: auto; max-width: 12; }
+        #log_view .datatable--column-key-ga        { width: auto; max-width: 12; }
+        #log_view .datatable--column-key-payload   { width: auto; max-width: 20; }
+        
+        /* Die Namensspalten bekommen auch "auto", damit sie sich anpassen, anstatt 1fr zu fordern. */
+        #log_view .datatable--column-key-pa_name   { width: auto; } 
+        #log_view .datatable--column-key-ga_name   { width: auto; }
+        /* --- ENDE KORREKTUR --- */
+
         #open_file_dialog > Horizontal { height: auto; align: center middle; margin-top: 1; }
         

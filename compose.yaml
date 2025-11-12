@@ -1,0 +1,30 @@
+services:
+  logger:
+    image: henfri/knx-lens
+    container_name: knx_logger
+    command:
+      - python
+      - knx-lens-logger.py
+    #    network_mode: "host"
+    volumes:
+      # Mountet lokale Verzeichnisse in den Container
+      - ${DOCKERCONFIG}/knx-lens/logs:/app/logs
+      - ${DOCKERCONFIG}/knx-lens/project:/app/project
+    env_file:
+      - .env
+    restart: unless-stopped
+  web:
+    image: henfri/knx-lens
+    container_name: knx_web
+    command:
+      - python
+      - knx-lens-web.py
+    network_mode: host
+    volumes:
+      # Lesezugriff auf die Logs
+      - ${DOCKERCONFIG}/knx-lens/logs:/app/logs:ro
+      - ${DOCKERCONFIG}/knx-lens/project:/app/project
+    env_file:
+      - .env
+    restart: unless-stopped
+networks: {}
