@@ -29,7 +29,9 @@ from xknx.io import ConnectionConfig, ConnectionType, GatewayScanner
 from xknx.telegram import Telegram
 from xknx.telegram.apci import GroupValueWrite, GroupValueResponse
 from xknxproject.models import KNXProject
-
+from xknx.dpt.dpt_10 import KNXTime
+from xknx.dpt.dpt_11 import KNXDate
+from xknx.dpt.dpt_19 import KNXDateTime
 
 # --- LOGGING-KONFIGURATION ---
 
@@ -114,33 +116,50 @@ def telegram_to_log_message(telegram: Telegram, knx_project: Optional[KNXProject
             ia_name = device.get('name', '')
         if (ga_data := knx_project["group_addresses"].get(ga_string)) is not None:
             ga_name = ga_data.get('name', '')
-        
+
         if (data := telegram.decoded_data) is not None:
-            # str(data) liefert die saubere Darstellung, z.B. "5.0 °C (DPT...)"
-            # Dies vermeidet BEIDE Probleme (Dopplung und KNXTime-Objekt).
-            full_data_str = str(data)
+            value = data.value
             
-            # .split() entfernt sauber den "(DPT..."-Teil, den Sie nicht wollten.
-            data_str = full_data_str.split(' (DPT', 1)[0]
+            # --- KORREKTUR: Spezifische DPTs abfangen ---
+            
+            if isinstance(value, KNXTime):
+                # Gewünschtes Format: HH:MI:SS
+                data_str = value.as_time().strftime('%H:%M:%S')
+            
+            elif isinstance(value, KNXDate):
+                # Gewünschtes Format: YYYY-MM-DD
+                data_str = value.as_date().isoformat()
+
+            elif isinstance(value, KNXDateTime):
+                # Gewünschtes Format: YYYY-MM-DD HH:MI:SS
+                data_str = value.as_datetime().strftime('%Y-%m-%d %H:%M:%S')
+
+            else:
+                # Allgemeiner Fallback für alle ANDEREN DPTs (Temp, Power, etc.)
+                # str(data) -> "5.0 °C (DPT..."
+                full_data_str = str(data)
+                # .split() -> "5.0 °C"
+                data_str = full_data_str.split(' (DPT', 1)[0]
+    
         else:
-            # Fallback für Dinge wie <GroupValueRead />
+            # Fallback für <GroupValueRead /> oder wenn DPT im Projekt fehlt
             data_str = str(payload)
-            
+
     else:
         # Ohne Projektdatei nur die Rohdaten verwenden
         data_str = str(payload)
         
     # ANGEPASSTE SPALTENBREITEN ZUR VERMEIDUNG VON ZEILENUMBRÜCHEN
     col_widths = {
-        "timestamp": 26,
+        "timestamp": 22,
         "ia_string": 9,
         "ia_name": 25,  # Gekürzt von 30
         "ga_string": 8,
         "ga_name": 30,  # Gekürzt von 34
-        "data": 25      # Gekürzt von 50
+        "data": 50 
     }
     # Erzeugt eine saubere, mit Pipe getrennte Zeile
-    # --- KORREKTUR: Doppelte "data_str" Zeile entfernt ---
+
     line = (
         f"{timestamp:<{col_widths['timestamp']}} | "
         f"{ia_string[:col_widths['ia_string']]:<{col_widths['ia_string']}} | "
@@ -149,7 +168,7 @@ def telegram_to_log_message(telegram: Telegram, knx_project: Optional[KNXProject
         f"{ga_name[:col_widths['ga_name']]:<{col_widths['ga_name']}} | "
         f"{data_str[:col_widths['data']]:<{col_widths['data']}}"
     )
-    # --- ENDE KORREKTUR ---
+
     return line
 
 def load_project(file_path: str, password: Optional[str]) -> Optional[KNXProject]:
