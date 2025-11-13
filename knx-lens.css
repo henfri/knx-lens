@@ -1,7 +1,18 @@
 #loading_label { width: 100%; height: 100%; content-align: center middle; padding: 1; }
-#filter_dialog, #open_file_dialog { width: 80%; max-width: 70; height: auto; padding: 1 2; background: $surface; border: heavy $primary; }
-#filter_dialog > Label, #open_file_dialog > Label { margin-bottom: 1; }
-#filter_input, #path_input { background: $boost; }
+
+/* --- DIALOG-STYLING (VEREINFACHT) --- */
+#filter_dialog, #open_file_dialog, #time_filter_dialog { 
+    padding: 1 2; 
+    background: $surface; 
+    border: heavy $primary;
+    width: 80%; 
+    max-width: 70; 
+    height: auto;
+}
+/* --- ENDE DIALOG-STYLING --- */
+
+#filter_dialog > Label, #open_file_dialog > Label, #time_filter_dialog > Label { margin-bottom: 1; }
+#filter_input, #path_input, #start_input, #end_input { background: $boost; }
 
 TabbedContent {
     height: 1fr;
@@ -11,24 +22,18 @@ TabbedContent {
     width: 100%;
 }
 
-/* Style für die Fußzeile (Caption) der Tabelle */
 DataTable > .datatable--caption {
     width: 100%;
     text-align: center;
     color: $text-muted;
 }
 
-/* --- LÖSUNG (V8): Breiten werden in Python berechnet --- */
-
-/* WICHTIG: Wir brauchen 'overflow' hier, damit der Text,
-   der länger als die berechnete Spaltenbreite ist,
-   abgeschnitten wird ('...'). */
 #log_widget .datatable--column-key-pa_name,
 #log_widget .datatable--column-key-ga_name {
     overflow: hidden;
     text-overflow: ellipsis;
 }
-/* Alle 'width:'-Definitionen für Spalten sind entfernt. */
-/* --- ENDE DER LÖSUNG --- */
 
+/* --- VEREINFACHT: Nur noch das horizontale Button-Layout --- */
 #open_file_dialog > Horizontal { height: auto; align: center middle; margin-top: 1; }
+#time_filter_dialog > Horizontal { height: auto; align: center middle; margin-top: 1; }

@@ -20,7 +20,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Kopieren Sie alle Ihre Python-Anwendungsskripte
-COPY knx-lens.css .
+COPY *.py knx-lens.css .
 
 # Setzen Sie Berechtigungen (nur das Hauptskript muss ausführbar sein)
 # und weisen Sie dem App-Benutzer den Besitz aller App-Dateien zu
