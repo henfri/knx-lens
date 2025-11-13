@@ -116,9 +116,14 @@ def telegram_to_log_message(telegram: Telegram, knx_project: Optional[KNXProject
             ga_name = ga_data.get('name', '')
         
         if (data := telegram.decoded_data) is not None:
-            data_str = str(data)
+            # str(data) liefert die saubere Darstellung, z.B. "5.0 °C (DPT...)"
+            # Dies vermeidet BEIDE Probleme (Dopplung und KNXTime-Objekt).
+            full_data_str = str(data)
+            
+            # .split() entfernt sauber den "(DPT..."-Teil, den Sie nicht wollten.
+            data_str = full_data_str.split(' (DPT', 1)[0]
         else:
-            # Fallback, wenn keine dekodierten Daten vorhanden sind (z.B. bei GroupValueRead)
+            # Fallback für Dinge wie <GroupValueRead />
             data_str = str(payload)
             
     else:
