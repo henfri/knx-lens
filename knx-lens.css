@@ -1,7 +1,7 @@
 #loading_label { width: 100%; height: 100%; content-align: center middle; padding: 1; }
 
-/* --- DIALOG-STYLING (VEREINFACHT) --- */
-#filter_dialog, #open_file_dialog, #time_filter_dialog { 
+/* --- DIALOG-STYLING --- */
+#filter_dialog, #time_filter_dialog { 
     padding: 1 2; 
     background: $surface; 
     border: heavy $primary;
@@ -9,18 +9,46 @@
     max-width: 70; 
     height: auto;
 }
+
+#filter_dialog > Label, #time_filter_dialog > Label { margin-bottom: 1; }
+#filter_input, #start_input, #end_input { background: $boost; }
+
 /* --- ENDE DIALOG-STYLING --- */
 
-#filter_dialog > Label, #open_file_dialog > Label, #time_filter_dialog > Label { margin-bottom: 1; }
-#filter_input, #path_input, #start_input, #end_input { background: $boost; }
-
+/* WICHTIG: Layout für Tabs erzwingen */
 TabbedContent {
     height: 1fr;
 }
 
+/* Interne Struktur von Textual Tabs ansprechen */
+ContentSwitcher {
+    height: 1fr;
+}
+
+TabPane {
+    height: 100%;
+    padding: 0 1; /* Etwas Abstand */
+}
+
 #log_view {
     width: 100%;
+    height: 100%;
 }
+
+/* --- NEU: Datei-Browser im Tab --- */
+#files_pane {
+    height: 100%;
+    width: 100%;
+}
+
+#file_browser {
+    height: 100%;
+    min-height: 20; /* Mindesthöhe erzwingen */
+    width: 100%;
+    background: $surface;
+    border: solid $secondary; /* Rahmen hilft beim Debuggen des Layouts */
+}
+/* --- ENDE NEU --- */
 
 DataTable > .datatable--caption {
     width: 100%;
@@ -33,7 +61,3 @@ DataTable > .datatable--caption {
     overflow: hidden;
     text-overflow: ellipsis;
 }
-
-/* --- VEREINFACHT: Nur noch das horizontale Button-Layout --- */
-#open_file_dialog > Horizontal { height: auto; align: center middle; margin-top: 1; }
-#time_filter_dialog > Horizontal { height: auto; align: center middle; margin-top: 1; }

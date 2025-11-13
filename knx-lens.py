@@ -3,18 +3,15 @@
 
 """
 Ein interaktiver KNX Projekt-Explorer und Log-Filter.
-- Lädt die Logik zum Parsen von Projekt- und Logdateien
-  aus externen Modulen.
+Hauptdatei: Initialisiert die App und verbindet Logik mit UI.
 """
 import argparse
 import os
 import sys
 import traceback
-import re
-import zipfile
-import io
 import logging
 import time
+import re
 from datetime import datetime, time as datetime_time
 from pathlib import Path
 from typing import Dict, List, Any, Optional, Set, Tuple
@@ -23,12 +20,8 @@ from typing import Dict, List, Any, Optional, Set, Tuple
 from dotenv import load_dotenv, set_key, find_dotenv
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Vertical, Center, Horizontal
-from textual.screen import ModalScreen
-from textual.widgets import (
-    Header, Footer, Tree, Static, Input, TabbedContent, 
-    TabPane, Label, Button, DataTable
-)
+from textual.containers import Vertical
+from textual.widgets import Header, Footer, Tree, Static, TabbedContent, TabPane, DataTable, DirectoryTree, Input
 from textual.widgets.tree import TreeNode
 from textual import events
 from textual.timer import Timer
@@ -41,85 +34,15 @@ from knx_project_utils import (
     build_building_tree_data
 )
 from knx_log_utils import parse_and_cache_log_data
+# Importiere Screens UND den neuen Tree
+from knx_tui_screens import FilterInputScreen, TimeFilterScreen, FilteredDirectoryTree
 # --- ENDE LOKALE IMPORTE ---
 
 
 ### --- SETUP & KONSTANTEN ---
-LOG_LEVEL = logging.INFO
+LOG_LEVEL = logging.DEBUG
 TreeData = Dict[str, Any]
-MAX_LOG_LINES_NO_FILTER = 5000  # Performance-Fix
-
-### --- TUI: SCREENS & MODALS ---
-
-class FilterInputScreen(ModalScreen[str]):
-    """Ein modaler Bildschirm für die Filtereingabe."""
-    def compose(self) -> ComposeResult:
-        yield Center(Vertical(
-            Label("Baum filtern (Enter zum Bestätigen, ESC zum Abbrechen):"),
-            Input(placeholder="Filtertext...", id="filter_input"),
-            id="filter_dialog"
-        ))
-    def on_mount(self) -> None: self.query_one("#filter_input", Input).focus()
-    def on_input_submitted(self, event: Input.Submitted) -> None: self.dismiss(event.value)
-    def on_key(self, event: events.Key) -> None:
-        if event.key == "escape": self.dismiss("")
-
-# --- VEREINFACHTE OpenFileScreen (STABIL) ---
-class OpenFileScreen(ModalScreen[Tuple[str, bool]]):
-    """Ein modaler Bildschirm zum Öffnen einer Log-Datei."""
-    def compose(self) -> ComposeResult:
-        yield Center(Vertical(
-            Label("Pfad zur Log-Datei (.log oder .zip) eingeben:"),
-            Input(placeholder="/pfad/zur/datei.log", id="path_input"),
-            Horizontal(
-                Button("Temporär öffnen", variant="primary", id="open_temp"),
-                Button("Öffnen & als Standard speichern", variant="success", id="open_save"),
-                Button("Abbrechen", variant="error", id="cancel"),
-            ),
-            id="open_file_dialog"
-        ))
-    def on_mount(self) -> None: self.query_one("#path_input", Input).focus()
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        path = self.query_one(Input).value
-        if event.button.id == "cancel" or not path:
-            self.dismiss(("", False))
-        elif event.button.id == "open_temp":
-            self.dismiss((path, False))
-        elif event.button.id == "open_save":
-            self.dismiss((path, True))
-# --- ENDE OpenFileScreen ---
-
-class TimeFilterScreen(ModalScreen[Tuple[Optional[str], Optional[str]]]):
-    """Ein modaler Bildschirm für den Zeitfilter."""
-    
-    def __init__(self, start_val: Optional[str], end_val: Optional[str]):
-        super().__init__()
-        self.start_val = start_val or ""
-        self.end_val = end_val or ""
-
-    def compose(self) -> ComposeResult:
-        yield Center(Vertical(
-            Label("Log nach Zeit filtern (z.B. 10:30 oder 10:30:15):"),
-            Label("Leer lassen, um Filter zu deaktivieren."),
-            Input(placeholder="Startzeit (HH:MM)", id="start_input", value=self.start_val),
-            Input(placeholder="Endzeit (HH:MM)", id="end_input", value=self.end_val),
-            Horizontal(
-                Button("Filtern", variant="success", id="apply_filter"),
-                Button("Abbrechen", variant="error", id="cancel"),
-            ),
-            id="time_filter_dialog" 
-        ))
-    
-    def on_mount(self) -> None: 
-        self.query_one("#start_input", Input).focus()
-
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "cancel":
-            self.dismiss((None, None))
-        elif event.button.id == "apply_filter":
-            start = self.query_one("#start_input").value
-            end = self.query_one("#end_input").value
-            self.dismiss((start, end))
+MAX_LOG_LINES_NO_FILTER = 5000
 
 ### --- TUI: HAUPTANWENDUNG ---
 class KNXLens(App):
@@ -129,7 +52,7 @@ class KNXLens(App):
         Binding("a", "toggle_selection", "Auswahl"),
         Binding("c", "copy_label", "Kopieren"),
         Binding("f", "filter_tree", "Filtern"),
-        Binding("o", "open_log_file", "Log öffnen"),
+        Binding("o", "open_log_file", "Dateien-Tab öffnen"), # Geändert
         Binding("r", "reload_log_file", "Log neu laden"),
         Binding("t", "toggle_log_reload", "Auto-Reload Log"),
         Binding("i", "time_filter", "Zeitfilter"),
@@ -196,7 +119,14 @@ class KNXLens(App):
             self.log_widget = DataTable(id="log_view")
             self.log_widget.cursor_type = "row"
 
-            # --- Manuelle Breitenberechnung (V8) ---
+            # --- NEU: Datei-Browser mit Pfad-Eingabe ---
+            file_browser_container = Vertical(
+                Input(placeholder="Pfad eingeben (z.B. C:/ oder //Server/Share) und Enter drücken...", id="path_changer"),
+                FilteredDirectoryTree(".", id="file_browser"),
+                id="files_container"
+            )
+            # ---
+
             TS_WIDTH = 24
             PA_WIDTH = 10
             GA_WIDTH = 10
@@ -204,24 +134,25 @@ class KNXLens(App):
             COLUMN_SEPARATORS_WIDTH = 6 
             fixed_width = TS_WIDTH + PA_WIDTH + GA_WIDTH + PAYLOAD_WIDTH + COLUMN_SEPARATORS_WIDTH
             available_width = self.app.size.width
-            remaining_width = available_width - fixed_width - 4 # Puffer
+            remaining_width = available_width - fixed_width - 4 
             name_width = max(10, remaining_width // 2)
             
-            logging.debug(f"on_data_loaded: Terminalbreite={self.app.size.width}, Fix={fixed_width}, Rest={remaining_width}, NameWidth={name_width}")
-
             self.log_widget.add_column("Timestamp", key="ts", width=TS_WIDTH)
             self.log_widget.add_column("PA", key="pa", width=PA_WIDTH)
             self.log_widget.add_column("Gerät (PA)", key="pa_name", width=name_width)
             self.log_widget.add_column("GA", key="ga", width=GA_WIDTH)
             self.log_widget.add_column("Gruppenadresse (GA)", key="ga_name", width=name_width)
             self.log_widget.add_column("Payload", key="payload", width=PAYLOAD_WIDTH)
-            # --- ENDE V8 ---
 
             tabs.add_pane(TabPane("Gebäudestruktur", building_tree, id="building_pane"))
             tabs.add_pane(TabPane("Physikalische Adressen", pa_tree, id="pa_pane"))
             tabs.add_pane(TabPane("Gruppenadressen", ga_tree, id="ga_pane"))
             tabs.add_pane(TabPane("Log-Ansicht", self.log_widget, id="log_pane"))
             
+            # --- Geändert: Container statt direktem Tree ---
+            tabs.add_pane(TabPane("Dateien", file_browser_container, id="files_pane"))
+            # ---
+
             logging.debug("on_data_loaded: Populiere 'building_tree'...")
             self._populate_tree_from_data(building_tree, self.building_tree_data)
             logging.debug("on_data_loaded: Populiere 'pa_tree'...")
@@ -232,7 +163,6 @@ class KNXLens(App):
 
             tabs.disabled = False
             
-            # Fokus auf TabbedContent setzen
             try:
                 self.query_one(TabbedContent).focus()
             except Exception:
@@ -242,6 +172,41 @@ class KNXLens(App):
         except Exception as e:
             logging.error(f"on_data_loaded: Kritischer Fehler beim UI-Aufbau: {e}", exc_info=True) 
             self.show_startup_error(e, traceback.format_exc())
+
+    # --- NEU: Handler für Pfad-Eingabe ---
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        """Wechselt das Verzeichnis des Datei-Browsers."""
+        if event.input.id == "path_changer":
+            new_path = event.value
+            if os.path.isdir(new_path):
+                try:
+                    self.query_one("#file_browser", DirectoryTree).path = new_path
+                    self.notify(f"Verzeichnis gewechselt: {new_path}")
+                except Exception as e:
+                    self.notify(f"Fehler beim Wechseln: {e}", severity="error")
+            else:
+                self.notify(f"Verzeichnis nicht gefunden: {new_path}", severity="error")
+    # ---
+    # --- NEU: Handler für Datei-Auswahl im neuen Tab ---
+    def on_directory_tree_file_selected(self, event: DirectoryTree.FileSelected) -> None:
+        """Wird aufgerufen, wenn im Dateien-Tab eine Datei ausgewählt wird."""
+        event.stop()
+        file_path = str(event.path)
+        
+        # Prüfen, ob wir diese Datei laden können
+        if file_path.lower().endswith((".log", ".zip", ".txt")):
+            self.notify(f"Lade Datei: {os.path.basename(file_path)}")
+            self.config['log_file'] = file_path
+            
+            # Ggf. als Standard speichern (optional, hier erstmal nur laden)
+            # dotenv_path = find_dotenv() or Path(".env")
+            # set_key(str(dotenv_path), "LOG_FILE", file_path, quote_mode="never")
+
+            self._load_log_file_and_update_views()
+            
+            # Automatisch zum Log-View springen
+            self.query_one(TabbedContent).active = "log_pane"
+    # ---
 
     def _populate_tree_from_data(self, tree: Tree, data: TreeData, expand_all: bool = False):
         logging.debug(f"_populate_tree_from_data: Starte für Baum '{tree.id or 'unbekannt'}'.")
@@ -269,11 +234,6 @@ class KNXLens(App):
             tree.root.expand_all()
 
     def _process_log_lines(self):
-        """
-        Filtert die in `self.cached_log_data` zwischengespeicherten,
-        angereicherten Log-Einträge basierend auf `self.selected_gas`
-        und füllt die `DataTable`.
-        """
         if not self.log_widget: return
         
         try:
@@ -377,6 +337,11 @@ class KNXLens(App):
             
             logging.debug("Aktualisiere Baum-Labels...")
             for tree in self.query(Tree):
+                # --- KORREKTUR: Datei-Browser überspringen ---
+                # Der Dateibaum hat keine KNX-Daten, daher ignorieren wir ihn hier.
+                if tree.id == "file_browser": 
+                    continue
+                # --- ENDE KORREKTUR ---
                 self._update_tree_labels_recursively(tree.root)
             logging.debug("Baum-Labels aktualisiert.")
             
@@ -384,18 +349,14 @@ class KNXLens(App):
             self._process_log_lines()
             logging.debug("Beende _process_log_lines.")
 
-            # --- KORREKTUR: Fokus NACH dem Laden setzen ---
-            # Wir nutzen eine Helferfunktion mit call_later, um sicherzustellen,
-            # dass dies der allerletzte Schritt im Event-Loop ist.
+            # Footer-Fix: Fokus verzögert setzen
             def set_focus_final():
                 try:
                     self.query_one(TabbedContent).focus()
-                    logging.debug("Fokus auf TabbedContent (verzögert) gesetzt.")
-                except Exception as e:
-                    logging.warning(f"Fokus-Fehler: {e}")
+                except Exception:
+                    pass
             
             self.call_later(set_focus_final)
-            # --- ENDE KORREKTUR ---
 
             duration = time.time() - start_time
             logging.info(f"Log-Datei '{os.path.basename(log_file_path)}' in {duration:.2f}s gelesen und verarbeitet.")
@@ -407,15 +368,11 @@ class KNXLens(App):
             logging.error(f"Fehler beim Verarbeiten von '{log_file_path}': {e}", exc_info=True)
             self.cached_log_data = []
             self.payload_history.clear()
-            
+
     def _refilter_log_view(self) -> None:
-        """Filtert die bereits geladenen Log-Zeilen neu, ohne die Datei erneut zu lesen."""
         if not self.log_widget: return
-        
         logging.info("Log-Ansicht wird mit gecachten Daten neu gefiltert (synchron).")
-        logging.debug("Starte _process_log_lines...")
         self._process_log_lines()
-        logging.debug("Beende _process_log_lines.")
 
     def _get_descendant_gas(self, node: TreeNode) -> Set[str]:
         gas = set()
@@ -427,7 +384,12 @@ class KNXLens(App):
 
     def _update_tree_labels_recursively(self, node: TreeNode) -> None:
         display_label = ""
-        if node.data and "original_name" in node.data:
+        
+        # --- KORREKTUR: Typsichere Prüfung ---
+        # Wir stellen sicher, dass node.data ein Dictionary ist, bevor wir "in" benutzen.
+        # Das verhindert Abstürze bei DirEntry-Objekten (Datei-Browser).
+        if isinstance(node.data, dict) and "original_name" in node.data:
+        # --- ENDE KORREKTUR ---
             original_name = node.data["original_name"]
             display_label = original_name
             
@@ -451,7 +413,8 @@ class KNXLens(App):
                     
                     display_label = f"{original_name} -> {payload_str}"
         else:
-            display_label = re.sub(r"^(\[[ *\-]] )+", "", node.label.plain)
+            # Fallback für Knoten ohne unsere Daten (oder Datei-Knoten)
+            display_label = re.sub(r"^(\[[ *\-]] )+", "", str(node.label))
 
         prefix = ""
         all_descendant_gas = self._get_descendant_gas(node)
@@ -464,20 +427,23 @@ class KNXLens(App):
             else: 
                 prefix = "[-] "
 
+        # Nur Label setzen, wenn es sich geändert hat (Performance) oder wir erzwingen wollen
         node.set_label(prefix + display_label)
 
         for child in node.children:
             self._update_tree_labels_recursively(child)
-
     def action_toggle_selection(self) -> None:
         try:
             active_tree = self.query_one(TabbedContent).active_pane.query_one(Tree)
+            # Verhindere Crash im Dateibaum (hier gibt es nichts zu selektieren)
+            if active_tree.id == "file_browser": return
+
             node = active_tree.cursor_node
             if not node: return
             descendant_gas = self._get_descendant_gas(node)
             if not descendant_gas: return
             
-            node_label = re.sub(r"^(\[[ *\-]] )+", "", node.label.plain)
+            node_label = re.sub(r"^(\[[ *\-]] )+", "", str(node.label))
             if descendant_gas.issubset(self.selected_gas):
                 logging.info(f"Auswahl ENTFERNT für Knoten '{node_label}'. {len(descendant_gas)} GA(s) entfernt.")
                 self.selected_gas.difference_update(descendant_gas)
@@ -486,14 +452,16 @@ class KNXLens(App):
                 self.selected_gas.update(descendant_gas)
             
             for tree in self.query(Tree):
+                # --- KORREKTUR: Dateibaum überspringen ---
+                if tree.id == "file_browser": continue
+                # --- ENDE KORREKTUR ---
                 self._update_tree_labels_recursively(tree.root)
             
             if self.query_one(TabbedContent).active == "log_pane":
                 self._refilter_log_view()
 
         except Exception as e:
-            logging.error(f"Fehler bei action_toggle_selection: {e}", exc_info=True)
-            
+            logging.error(f"Fehler bei action_toggle_selection: {e}", exc_info=True)            
     def on_tabbed_content_tab_activated(self, event: TabbedContent.TabActivated) -> None:
         if event.pane.id == "log_pane":
             logging.info("Log-Ansicht-Tab wurde aktiviert. Wende aktuellen Filter neu an.")
@@ -514,28 +482,13 @@ class KNXLens(App):
             self.notify("Konnte nichts kopieren.", severity="error")
 
     def action_open_log_file(self) -> None:
-        def handle_open_result(result: Tuple[str, bool]):
-            path, should_save = result
-            if not path:
-                self.notify("Öffnen abgebrochen.", severity="warning")
-                return
-            
-            if not os.path.exists(path):
-                self.notify(f"Datei nicht gefunden: {path}", severity="error", timeout=5)
-                return
-
-            self.config['log_file'] = path
-            self.notify(f"Log-Datei geöffnet: {os.path.basename(path)}")
-
-            if should_save:
-                dotenv_path = find_dotenv() or Path(".env")
-                if not os.path.exists(dotenv_path): Path(dotenv_path).touch()
-                set_key(str(dotenv_path), "LOG_FILE", path, quote_mode="never")
-                self.notify("Pfad als neuen Standard gespeichert.", severity="information")
-                logging.info(f"Neuer Standard-Log-Pfad gespeichert: {path}")
-
-            self._load_log_file_and_update_views()
-        self.push_screen(OpenFileScreen(), handle_open_result)
+        """Wechselt zum 'Dateien'-Tab (ersetzt den Dialog)."""
+        self.query_one(TabbedContent).active = "files_pane"
+        # Optional: Fokus auf den Baum setzen
+        try:
+            self.query_one("#file_browser").focus()
+        except:
+            pass
 
     def action_reload_log_file(self) -> None:
         logging.info("Log-Datei wird manuell von Festplatte neu geladen.")
@@ -553,10 +506,7 @@ class KNXLens(App):
             logging.info("Auto-Reload für Log-Datei im 1-Sekunden-Intervall aktiviert.")
 
     def action_time_filter(self) -> None:
-        """Öffnet den Zeitfilter-Dialog."""
-        
         def parse_time_input(time_str: str) -> Optional[datetime_time]:
-            """Parst HH:MM oder HH:MM:SS Eingaben."""
             if not time_str:
                 return None
             try:
@@ -685,8 +635,6 @@ class KNXLens(App):
             self._populate_tree_from_data(tree, filtered_data or {}, expand_all=True)
 
     def on_resize(self, event: events.Resize) -> None:
-        """Fenstergröße hat sich geändert. Berechne Spalten neu."""
-        
         if not self.log_widget:
             return
 

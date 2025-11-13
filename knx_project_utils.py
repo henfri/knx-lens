@@ -61,21 +61,53 @@ def load_or_parse_project(knxproj_path: str, password: Optional[str]) -> Dict:
     
     return project_data
 
+def _get_smart_name(data_dict: Dict, fallback: str) -> str:
+    """
+    Interne Hilfsfunktion: Baut einen Namen aus 'text' und 'function_text'.
+    Fallback auf 'name' oder den übergebenen Fallback-String.
+    """
+    parts = []
+    
+    # 1. Priorität: Kombination aus "text" und "function_text"
+    if val := data_dict.get("text"):
+        parts.append(str(val).strip())
+    
+    if val := data_dict.get("function_text"):
+        parts.append(str(val).strip())
+        
+    if parts:
+        return " - ".join(parts)
+    
+    # 2. Priorität: "name" (oft kryptisch wie "LOG_KOf10O")
+    if val := data_dict.get("name"):
+        return str(val).strip()
+        
+    # 3. Priorität: Fallback
+    return fallback
+
 def get_best_channel_name(channel: Dict, ch_id: str) -> str:
-    return channel.get("function_text") or channel.get("name") or f"Kanal-{ch_id}"
+    """Ermittelt den besten Namen für einen Kanal."""
+    return _get_smart_name(channel, f"Kanal-{ch_id}")
 
 def add_com_objects_to_node(parent_node: Dict, com_obj_ids: List[str], project_data: Dict):
-    """Fügt Communication Objects als Kinder zu einem Knoten hinzu und speichert den Originalnamen."""
+    """Fügt Communication Objects als Kinder zu einem Knoten hinzu."""
     comm_objects = project_data.get("communication_objects", {})
     for co_id in com_obj_ids:
         co = comm_objects.get(co_id)
         if co:
-            co_name = co.get("name", f"CO-{co_id}")
+            # --- KORREKTUR: Hier nutzen wir jetzt auch die intelligente Namensfindung ---
+            co_name = _get_smart_name(co, f"CO-{co_id}")
+            # --- ENDE KORREKTUR ---
+            
             gas = co.get("group_address_links", [])
-            gas_str = ", ".join(gas)
-            co_label = f"{co['number']}: {co_name} → [{gas_str}]"
+            gas_str = ", ".join([str(g) for g in gas])
+            
+            co_number = co.get('number', '?')
+            co_label = f"{co_number}: {co_name} → [{gas_str}]"
+            
             parent_node["children"][co_label] = {
-                "id": f"co_{co_id}", "name": co_label,
+                "id": f"co_{co_id}", 
+                "name": co_label,
                 "data": {"type": "co", "gas": set(gas), "original_name": co_label}, 
                 "children": {}
             }
@@ -141,20 +173,24 @@ def build_ga_tree_data(project: Dict) -> TreeData:
     sorted_main_keys = sorted(hierarchy.keys(), key=int)
     for main_key in sorted_main_keys:
         main_group = hierarchy[main_key]
-        main_node_name = f"({main_key}) {main_group.get('name') or f'HG {main_key}'}"
+        mg_name = main_group.get('name') or f'HG {main_key}'
+        main_node_name = f"({main_key}) {mg_name}"
         main_node = root_node["children"].setdefault(main_key, {"id": f"ga_main_{main_key}", "name": main_node_name, "children": {}})
 
         sorted_sub_keys = sorted(main_group.get("subgroups", {}).keys(), key=lambda k: [int(p) for p in k.split('/')])
         for sub_key in sorted_sub_keys:
             sub_group = main_group["subgroups"][sub_key]
-            sub_node_name = f"({sub_key}) {sub_group.get('name') or f'MG {sub_key}'}"
+            sg_name = sub_group.get('name') or f'MG {sub_key}'
+            sub_node_name = f"({sub_key}) {sg_name}"
             sub_node = main_node["children"].setdefault(sub_key, {"id": f"ga_sub_{sub_key.replace('/', '_')}", "name": sub_node_name, "children": {}})
 
             sorted_addresses = sorted(sub_group.get("addresses", {}).items(), key=lambda item: [int(p) for p in item[0].split('/')])
             for addr_str, addr_details in sorted_addresses:
-                leaf_name = f"({addr_str}) {addr_details.get('name') or 'N/A'}"
+                addr_name = addr_details.get('name') or 'N/A'
+                leaf_name = f"({addr_str}) {addr_name}"
                 sub_node["children"][addr_str] = {
-                    "id": f"ga_{addr_str}", "name": leaf_name, 
+                    "id": f"ga_{addr_str}", 
+                    "name": leaf_name, 
                     "data": {"type": "ga", "gas": {addr_str}, "original_name": leaf_name}, 
                     "children": {}
                 }
@@ -166,12 +202,12 @@ def build_pa_tree_data(project: Dict) -> TreeData:
     devices = project.get("devices", {})
     topology = project.get("topology", {})
     
-    area_names = {str(area['address']): area.get('name', '') for area in topology.get("areas", {}).values()}
+    area_names = {str(area['address']): (area.get('name') or '') for area in topology.get("areas", {}).values()}
     line_names = {}
     for area in topology.get("areas", {}).values():
         for line in area.get("lines", {}).values():
             line_id = f"{area['address']}.{line['address']}"
-            line_names[line_id] = line.get('name', '')
+            line_names[line_id] = (line.get('name') or '')
 
     for pa, device in devices.items():
         parts = pa.split('.')
@@ -190,12 +226,14 @@ def build_pa_tree_data(project: Dict) -> TreeData:
         line_label = f"({line_id}) {line_name}" if line_name and line_name != f"Linie {line_id}" else f"Linie {line_id}"
         line_node = area_node["children"].setdefault(line_id_part, {"id": f"pa_{line_id}", "name": line_label, "children": {}})
 
-        device_name = f"({pa}) {device.get('name', 'N/A')}"
+        dev_name = device.get('name') or 'N/A'
+        device_name = f"({pa}) {dev_name}"
         device_node = line_node["children"].setdefault(dev_id, {"id": f"dev_{pa}", "name": device_name, "children": {}})
         
         processed_co_ids = set()
         for ch_id, channel in device.get("channels", {}).items():
-            ch_name = get_best_channel_name(channel, ch_id)
+            ch_name = get_best_channel_name(channel, str(ch_id))
+            
             ch_node = device_node["children"].setdefault(ch_name, {"id": f"ch_{pa}_{ch_id}", "name": ch_name, "children": {}})
             co_ids_in_channel = channel.get("communication_object_ids", [])
             add_com_objects_to_node(ch_node, co_ids_in_channel, project)
@@ -212,27 +250,36 @@ def build_building_tree_data(project: Dict) -> TreeData:
     building_tree = {"id": "bldg_root", "name": "Gebäudestruktur", "children": {}}
     locations = project.get("locations", {})
     devices = project.get("devices", {})
+    
     def process_space(space: Dict, parent_node: Dict):
-        space_name = space.get("name", "Unbenannter Bereich")
-        space_node = parent_node["children"].setdefault(space_name, {"id": f"loc_{space.get('identifier', space_name)}", "name": space_name, "children": {}})
+        space_name = space.get("name") or "Unbenannter Bereich"
+        space_id = space.get('identifier', space_name)
+        space_node = parent_node["children"].setdefault(space_name, {"id": f"loc_{space_id}", "name": space_name, "children": {}})
+        
         for pa in space.get("devices", []):
             device = devices.get(pa)
             if not device: continue
-            device_name = f"({pa}) {device.get('name', 'Unbenannt')}"
+            
+            dev_name = device.get('name') or 'Unbenannt'
+            device_name = f"({pa}) {dev_name}"
             device_node = space_node["children"].setdefault(device_name, {"id": f"dev_{pa}", "name": device_name, "children": {}})
+            
             processed_co_ids = set()
             for ch_id, channel in device.get("channels", {}).items():
-                ch_name = get_best_channel_name(channel, ch_id)
+                ch_name = get_best_channel_name(channel, str(ch_id))
                 ch_node = device_node["children"].setdefault(ch_name, {"id": f"ch_{pa}_{ch_id}", "name": ch_name, "children": {}})
                 co_ids_in_channel = channel.get("communication_object_ids", [])
                 add_com_objects_to_node(ch_node, co_ids_in_channel, project)
                 processed_co_ids.update(co_ids_in_channel)
+            
             all_co_ids = set(device.get("communication_object_ids", []))
             device_level_co_ids = all_co_ids - processed_co_ids
             if device_level_co_ids:
                 add_com_objects_to_node(device_node, list(device_level_co_ids), project)
+        
         for child_space in space.get("spaces", {}).values():
             process_space(child_space, space_node)
+            
     for location in locations.values():
         process_space(location, building_tree)
     return building_tree
