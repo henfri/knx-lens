@@ -116,13 +116,9 @@ def telegram_to_log_message(telegram: Telegram, knx_project: Optional[KNXProject
             ga_name = ga_data.get('name', '')
         
         if (data := telegram.decoded_data) is not None:
-            # Prüfen, ob das 'unit'-Attribut existiert, um AttributeError zu vermeiden
-            if hasattr(data, 'unit') and data.unit is not None:
-                data_str = f"{data.value} {data.unit}".strip()
-            else:
-                data_str = str(data.value)
+            data_str = str(data)
         else:
-            # Fallback, wenn keine dekodierten Daten vorhanden sind
+            # Fallback, wenn keine dekodierten Daten vorhanden sind (z.B. bei GroupValueRead)
             data_str = str(payload)
             
     else:
