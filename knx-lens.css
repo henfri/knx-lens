@@ -12,6 +12,7 @@
             width: 100%;
         }
 
+        /* Style für die Fußzeile (Caption) der Tabelle */
         DataTable > .datatable--caption {
             width: 100%;
             text-align: center;
@@ -23,8 +24,8 @@
         /* WICHTIG: Wir brauchen 'overflow' hier, damit der Text,
            der länger als die berechnete Spaltenbreite ist,
            abgeschnitten wird ('...'). */
-        #log_view .datatable--column-key-pa_name,
-        #log_view .datatable--column-key-ga_name {
+        #log_widget .datatable--column-key-pa_name,
+        #log_widget .datatable--column-key-ga_name {
             overflow: hidden;
             text-overflow: ellipsis;
         }

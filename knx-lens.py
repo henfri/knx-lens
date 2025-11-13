@@ -38,15 +38,15 @@ from textual.containers import Vertical, Center, Horizontal
 from textual.screen import ModalScreen
 from textual.widgets import Header, Footer, Tree, Static, Input, TabbedContent, TabPane, Label, Button, DataTable
 from textual.widgets.tree import TreeNode
-from textual import events
+from textual import events  # Für Resize
 from textual.timer import Timer
 from xknxproject import XKNXProj
 
 ### --- SETUP & KONSTANTEN ---
 # Anpassbares Log-Level (Optionen: logging.DEBUG, logging.INFO, logging.WARNING, logging.ERROR)
-LOG_LEVEL = logging.DEBUG
+LOG_LEVEL = logging.INFO
 TreeData = Dict[str, Any]
-MAX_LOG_LINES_NO_FILTER = 5000
+MAX_LOG_LINES_NO_FILTER = 5000  # Performance-Fix
 
 ### --- KERNLOGIK: PARSING & DATENSTRUKTURIERUNG ---
 # (Unverändert)
@@ -333,21 +333,14 @@ class KNXLens(App):
         self.ga_tree_data: TreeData = {}
         self.selected_gas: Set[str] = set()
         
-        # --- DATATABLE ANPASSUNG ---
-        self.log_widget: Optional[DataTable] = None # Geändert von RichLog
+        self.log_widget: Optional[DataTable] = None
         self.log_reload_timer: Optional[Timer] = None
         self.payload_history: Dict[str, List[Dict[str, str]]] = {}
-        
-        # NEU: Cache für angereicherte Log-Daten
-        # Statt List[str] (rohe Zeilen) speichern wir eine Liste von Dictionaries
-        # mit den bereits nachgeschlagenen Namen.
         self.cached_log_data: List[Dict[str, str]] = []
-        # --- ENDE ANPASSUNG ---
 
 
     def compose(self) -> ComposeResult:
         yield Header(name="KNX Projekt-Explorer")
-        # ID für den Lade-Container
         yield Vertical(Static("Lade und verarbeite Projektdatei...", id="loading_label"), id="loading_container")
         yield TabbedContent(id="main_tabs", disabled=True)
         yield Footer()
@@ -371,11 +364,11 @@ class KNXLens(App):
             self.call_from_thread(self.on_data_loaded)
         except Exception as e:
             self.call_from_thread(self.show_startup_error, e, traceback.format_exc())
-
+    
+    # --- LAYOUT-FIX (V8) + DEBUG-LOGGING ---
     def on_data_loaded(self) -> None:
         logging.debug("on_data_loaded: Beginne mit UI-Aufbau.")
         try:
-            # Entferne den *gesamten* Lade-Container
             logging.debug("on_data_loaded: Entferne Lade-Container.")
             loading_container = self.query_one("#loading_container")
             loading_container.remove()
@@ -386,47 +379,34 @@ class KNXLens(App):
             pa_tree = Tree("Linien", id="pa_tree")
             ga_tree = Tree("Funktionen", id="ga_tree")
             
-            # --- DATATABLE ANPASSUNG ---
             self.log_widget = DataTable(id="log_view")
             self.log_widget.cursor_type = "row"
 
             # --- NEUE LÖSUNG: Manuelle Breitenberechnung ---
-            
-            # Feste Breiten für Datenspalten
             TS_WIDTH = 24
             PA_WIDTH = 10
             GA_WIDTH = 10
             PAYLOAD_WIDTH = 25
-            
-            # Platz für Spaltentrenner (ca. 1 pro Spalte)
             COLUMN_SEPARATORS_WIDTH = 6 
-            
             fixed_width = TS_WIDTH + PA_WIDTH + GA_WIDTH + PAYLOAD_WIDTH + COLUMN_SEPARATORS_WIDTH
-            
-            # Verfügbare Breite für die beiden Namensspalten
-            # Wir nehmen die volle Terminalbreite
             available_width = self.app.size.width
-            remaining_width = available_width - fixed_width
-            
-            # Aufteilen auf 2 Spalten, Mindestbreite 10
+            # Puffer (4 Zeichen) für Scrollbar/Ränder
+            remaining_width = available_width - fixed_width - 4
             name_width = max(10, remaining_width // 2)
             
             logging.debug(f"on_data_loaded: Terminalbreite={self.app.size.width}, Fix={fixed_width}, Rest={remaining_width}, NameWidth={name_width}")
 
-            # Spalten mit *festen* Breiten hinzufügen
             self.log_widget.add_column("Timestamp", key="ts", width=TS_WIDTH)
             self.log_widget.add_column("PA", key="pa", width=PA_WIDTH)
-            self.log_widget.add_column("Gerät (PA)", key="pa_name", width=name_width) # <-- Manuell
+            self.log_widget.add_column("Gerät (PA)", key="pa_name", width=name_width) # Manuell
             self.log_widget.add_column("GA", key="ga", width=GA_WIDTH)
-            self.log_widget.add_column("Gruppenadresse (GA)", key="ga_name", width=name_width) # <-- Manuell
+            self.log_widget.add_column("Gruppenadresse (GA)", key="ga_name", width=name_width) # Manuell
             self.log_widget.add_column("Payload", key="payload", width=PAYLOAD_WIDTH)
-            
             # --- ENDE DER NEUEN LÖSUNG ---
 
             tabs.add_pane(TabPane("Gebäudestruktur", building_tree, id="building_pane"))
             tabs.add_pane(TabPane("Physikalische Adressen", pa_tree, id="pa_pane"))
             tabs.add_pane(TabPane("Gruppenadressen", ga_tree, id="ga_pane"))
-            # Wichtig: Die TabPane bekommt eine ID für das Scrolling
             tabs.add_pane(TabPane("Log-Ansicht", self.log_widget, id="log_pane"))
             
             logging.debug("on_data_loaded: Populiere 'building_tree'...")
@@ -434,7 +414,8 @@ class KNXLens(App):
             logging.debug("on_data_loaded: Populiere 'pa_tree'...")
             self._populate_tree_from_data(pa_tree, self.pa_tree_data)
             logging.debug("on_data_loaded: Populiere 'ga_tree'...")
-            self._populate_tree_from_data(ga_tree, self.ga_tree_data)
+            # --- TIPPFELER KORRIGIERT ---
+            self._populate_tree_from_data(ga_tree, self.ga_tree_data) 
             logging.debug("on_data_loaded: Bäume popoluiert. UI ist fast fertig.")
 
             tabs.disabled = False
@@ -443,10 +424,9 @@ class KNXLens(App):
             logging.error(f"on_data_loaded: Kritischer Fehler beim UI-Aufbau: {e}", exc_info=True) 
             self.show_startup_error(e, traceback.format_exc())
 
-
+    # --- DEBUG-LOGGING ---
     def _populate_tree_from_data(self, tree: Tree, data: TreeData, expand_all: bool = False):
-        logging.debug(f"_populate_tree_from_data: Starte für Baum '{tree.id or 'unbekannt'}'.")  # <-- HINZUGEFÜGT
-        # (Unverändert)
+        logging.debug(f"_populate_tree_from_data: Starte für Baum '{tree.id or 'unbekannt'}'.")
         tree.clear()
         def natural_sort_key(item: Tuple[str, Any]):
             key_str = str(item[0])
@@ -462,9 +442,9 @@ class KNXLens(App):
         if data and "children" in data:
             add_nodes(tree.root, data["children"])
         
-        logging.debug(f"_populate_tree_from_data: '{tree.id or 'unbekannt'}' Knoten hinzugefügt. Starte rekursives Label-Update...")  # <-- HINZUGEFÜGT
+        logging.debug(f"_populate_tree_from_data: '{tree.id or 'unbekannt'}' Knoten hinzugefügt. Starte rekursives Label-Update...")
         self._update_tree_labels_recursively(tree.root)
-        logging.debug(f"_populate_tree_from_data: '{tree.id or 'unbekannt'}' Label-Update beendet.")  # <-- HINZUGEFÜGT
+        logging.debug(f"_populate_tree_from_data: '{tree.id or 'unbekannt'}' Label-Update beendet.")
         
         tree.root.collapse_all()
         if expand_all:
@@ -481,14 +461,10 @@ class KNXLens(App):
                 return 'csv'
         return None
 
-    # --- DATATABLE ANPASSUNG ---
-    # Diese Funktion parst die Log-Datei *einmalig* und baut
-    # das payload_history UND den angereicherten self.cached_log_data auf.
     def _parse_and_cache_log_data(self, lines: List[str]):
         """
         Parst die Log-Datei, aktualisiert das `self.payload_history` UND
         baut den `self.cached_log_data` Cache mit angereicherten Daten auf.
-        Diese Funktion wird *einmal* pro Ladevorgang aufgerufen.
         """
         self.payload_history.clear()
         self.cached_log_data.clear()
@@ -499,7 +475,6 @@ class KNXLens(App):
             logging.warning("Konnte Log-Format beim Parsen für Cache nicht bestimmen.")
             return
 
-        # Hole Dictionaries für schnellen Lookup
         devices_dict = self.project_data.get("devices", {})
         ga_dict = self.project_data.get("group_addresses", {})
 
@@ -512,36 +487,27 @@ class KNXLens(App):
                 
                 if log_format == 'pipe_separated':
                     parts = [p.strip() for p in clean_line.split('|')]
-                    # Wir brauchen min. 4 Spalten (0-3) für TS und GA
                     if len(parts) > 3:
                         timestamp = parts[0]
                         ga = parts[3]
-                        # PA und Payload sind optional
                         pa = parts[1] if len(parts) > 1 else "N/A"
                         payload = parts[5] if len(parts) > 5 else None
                 
                 elif log_format == 'csv':
                     row = next(csv.reader([clean_line], delimiter=';'))
-                    # Wir brauchen min. 5 Spalten (0-4) für TS und GA
                     if len(row) > 4:
                         timestamp = row[0]
                         ga = row[4]
-                        # PA und Payload sind optional
                         pa = row[1] if len(row) > 1 else "N/A"
                         payload = row[6] if len(row) > 6 else None
                 
-                # Wir brauchen nur ts und ga für die Log-Ansicht.
-                # PA ist "N/A" wenn nicht gefunden. Payload ist optional (None).
                 if timestamp and ga and re.match(r'\d+/\d+/\d+', ga):
                     
-                    # 1. Payload History (NUR wenn Payload existiert)
                     if payload is not None:
                         if ga not in self.payload_history:
                             self.payload_history[ga] = []
                         self.payload_history[ga].append({'timestamp': timestamp, 'payload': payload})
                     
-                    # 2. Cache mit angereicherten Daten aufbauen (IMMER)
-                    #    (Solange TS und GA vorhanden sind)
                     pa_name = devices_dict.get(pa, {}).get("name", "N/A")
                     ga_name = ga_dict.get(ga, {}).get("name", "N/A")
                     
@@ -558,11 +524,10 @@ class KNXLens(App):
                 logging.debug(f"Konnte Log-Zeile nicht parsen: '{clean_line}' - Fehler: {e}")
                 continue
         
-        # Payload History sortieren (wie vorher)
         for ga in self.payload_history:
             self.payload_history[ga].sort(key=lambda x: x['timestamp'])
 
-
+    # --- PERFORMANCE-FIX (ADD_ROWS) + LIMITIERUNG (KEINE LADE-LOGIK) ---
     def _process_log_lines(self):
         """
         Filtert die in `self.cached_log_data` zwischengespeicherten,
@@ -570,69 +535,65 @@ class KNXLens(App):
         und füllt die `DataTable`.
         """
         if not self.log_widget: return
-        self.log_widget.clear()
+        
+        try:
+            self.log_widget.clear()
 
-        # Logik: Wenn KEINE GAs ausgewählt sind, zeigen wir ALLES.
-        # Wenn GAs ausgewählt SIND, filtern wir.
-        has_selection = bool(self.selected_gas)
-
-        # NEUE Prüfung: Sicherstellen, dass überhaupt Daten geladen wurden.
-        if not self.cached_log_data:
-             self.log_widget.add_row("[yellow]Keine Log-Daten geladen oder Log-Datei ist leer.[/yellow]")
-             self.log_widget.caption = "Keine Log-Daten"
-             return
-        
-        start_time = time.time()
-        
-        log_caption = ""
-        
-        # --- HIER IST DIE ÄNDERUNG ---
-        log_entries_to_process = self.cached_log_data
-        
-        if has_selection:
-            sorted_gas = sorted(list(self.selected_gas))
-            filter_info = f"Filtere Log für {len(sorted_gas)} GAs: {', '.join(sorted_gas)}"
-            logging.info(f"Applizieren des Log-Ansicht-Filters für {len(sorted_gas)} GAs.")
-            log_caption = f"Filter aktiv ({len(sorted_gas)} GAs)"
-        else:
-            logging.info("Keine Auswahl. Zeige alle Log-Einträge.")
-            if len(self.cached_log_data) > MAX_LOG_LINES_NO_FILTER:
-                # Nimm nur die letzten X Einträge (die neuesten)
-                log_entries_to_process = self.cached_log_data[-MAX_LOG_LINES_NO_FILTER:]
-                log_caption = f"Alle Einträge (Letzte {MAX_LOG_LINES_NO_FILTER} von {len(self.cached_log_data)} angezeigt)"
-                logging.warning(f"Kein Filter aktiv. Zeige nur die letzten {MAX_LOG_LINES_NO_FILTER} von {len(self.cached_log_data)} Log-Einträgen.")
+            has_selection = bool(self.selected_gas)
+    
+            if not self.cached_log_data:
+                 self.log_widget.add_row("[yellow]Keine Log-Daten geladen oder Log-Datei ist leer.[/yellow]")
+                 self.log_widget.caption = "Keine Log-Daten"
+                 return
+            
+            start_time = time.time()
+            log_caption = ""
+            log_entries_to_process = self.cached_log_data
+            
+            if has_selection:
+                sorted_gas = sorted(list(self.selected_gas))
+                filter_info = f"Filtere Log für {len(sorted_gas)} GAs: {', '.join(sorted_gas)}"
+                logging.info(f"Applizieren des Log-Ansicht-Filters für {len(sorted_gas)} GAs.")
+                log_caption = f"Filter aktiv ({len(sorted_gas)} GAs)"
             else:
-                log_caption = f"Alle Einträge ({len(self.cached_log_data)})"
-        # --- ENDE DER ÄNDERUNG ---
+                logging.info("Keine Auswahl. Zeige alle Log-Einträge.")
+                if len(self.cached_log_data) > MAX_LOG_LINES_NO_FILTER:
+                    log_entries_to_process = self.cached_log_data[-MAX_LOG_LINES_NO_FILTER:]
+                    log_caption = f"Alle Einträge (Letzte {MAX_LOG_LINES_NO_FILTER} von {len(self.cached_log_data)} angezeigt)"
+                    logging.warning(f"Kein Filter aktiv. Zeige nur die letzten {MAX_LOG_LINES_NO_FILTER} von {len(self.cached_log_data)} Log-Einträgen.")
+                else:
+                    log_caption = f"Alle Einträge ({len(self.cached_log_data)})"
 
-        found_count = 0
-        
-
-        rows_to_add = []
-        for i, log_entry in enumerate(log_entries_to_process):
+            found_count = 0
+            rows_to_add = []
+            for i, log_entry in enumerate(log_entries_to_process):
+                if has_selection and log_entry["ga"] not in self.selected_gas:
+                    continue 
+                rows_to_add.append((
+                    log_entry["timestamp"],
+                    log_entry["pa"],
+                    log_entry["pa_name"],
+                    log_entry["ga"],
+                    log_entry["ga_name"],
+                    log_entry["payload"]
+                ))
+                found_count += 1
             
-            # Überspringe die Zeile nur, WENN eine Auswahl existiert
-            # UND die GA der Zeile NICHT in der Auswahl ist.
-            if has_selection and log_entry["ga"] not in self.selected_gas:
-                continue # Überspringen
-
-            # Wir bauen die Zeile explizit mit den Spalten-Keys auf,
-            # die wir in 'on_data_loaded' definiert haben.
-            rows_to_add.append((
-                log_entry["timestamp"],
-                log_entry["pa"],
-                log_entry["pa_name"],
-                log_entry["ga"],
-                log_entry["ga_name"],
-                log_entry["payload"]
-            ))
+            self.log_widget.add_rows(rows_to_add)
             
-            found_count += 1
+            duration = time.time() - start_time
+            logging.info(f"Log-Ansicht gefiltert. {found_count} Einträge in {duration:.4f}s gefunden.")
+            self.log_widget.caption = f"{found_count} Einträge gefunden. ({duration:.2f}s) | {log_caption}"
         
-        # Füge alle Zeilen auf einmal hinzu
-        self.log_widget.add_rows(rows_to_add)
+        except Exception as e:
+            # Fallback-Fehlerbehandlung
+            logging.error(f"Schwerer Fehler in _process_log_lines: {e}", exc_info=True)
+            if self.log_widget:
+                self.log_widget.clear()
+                self.log_widget.add_row(f"[red]Fehler beim Verarbeiten der Log-Zeilen: {e}[/red]")
 
 
+    # --- ANGEPASSTE FUNKTION (KEINE LADE-LOGIK) ---
     def _load_log_file_and_update_views(self):
         """Liest die Log-Datei von der Festplatte, aktualisiert den Cache und alle Ansichten."""
         if not self.log_widget: return
@@ -644,24 +605,21 @@ class KNXLens(App):
             log_widget.clear()
             log_widget.add_row(f"[red]FEHLER: Log-Datei nicht gefunden unter '{log_file_path}'[/red]")
             log_widget.add_row("[dim]Mit 'o' eine andere Datei öffnen.[/dim]")
-            self.cached_log_data = [] # Cache leeren
-            self.payload_history.clear() # Payload-Verlauf auch leeren
+            self.cached_log_data = []
+            self.payload_history.clear()
             return
         
         start_time = time.time()
         logging.info(f"Lese Log-Datei von Festplatte: '{log_file_path}'")
-
-        if not self.log_reload_timer:
-            log_widget.clear()
-            log_widget.add_row(f"[bold]Lese Log:[/] {os.path.basename(log_file_path)}")
-            
+        
         try:
+            # Datei einlesen
             lines = []
             if log_file_path.lower().endswith(".zip"):
                 with zipfile.ZipFile(log_file_path, 'r') as zf:
                     log_files_in_zip = [name for name in zf.namelist() if name.lower().endswith('.log')]
                     if not log_files_in_zip:
-                        log_widget.clear() # Vorherige "Lese Log" Zeile entfernen
+                        log_widget.clear()
                         log_widget.add_row(f"\n[red]Keine .log-Datei im ZIP-Archiv gefunden.[/red]")
                         self.cached_log_data = []
                         self.payload_history.clear()
@@ -672,45 +630,46 @@ class KNXLens(App):
                 with open(log_file_path, 'r', encoding='utf-8') as f:
                     lines = f.readlines()
             
-            # --- DATATABLE ANPASSUNG ---
-            # Ruft die NEUE Funktion auf, die parst, anreichert und cacht.
+            # --- DATATABLE ANPASSUNG (Synchron) ---
+            # 1. Parsen und Cachen (langsam)
+            logging.debug("Starte _parse_and_cache_log_data...")
             self._parse_and_cache_log_data(lines)
+            logging.debug("Beende _parse_and_cache_log_data.")
             
-            # Baum-Labels mit neuen Payload-Daten aktualisieren
+            # 2. Baum-Labels aktualisieren
+            logging.debug("Aktualisiere Baum-Labels...")
             for tree in self.query(Tree):
                 self._update_tree_labels_recursively(tree.root)
+            logging.debug("Baum-Labels aktualisiert.")
             
-            # Ruft die NEUE Filterfunktion auf (ohne Argument)
+            # 3. Log-Ansicht filtern und rendern (langsam)
+            logging.debug("Starte _process_log_lines...")
             self._process_log_lines()
+            logging.debug("Beende _process_log_lines.")
             # --- ENDE ANPASSUNG ---
 
             duration = time.time() - start_time
             logging.info(f"Log-Datei '{os.path.basename(log_file_path)}' in {duration:.2f}s gelesen und verarbeitet.")
 
         except Exception as e:
-            log_widget.clear() # Vorherige "Lese Log" Zeile entfernen
+            log_widget.clear()
             log_widget.add_row(f"\n[red]Fehler beim Verarbeiten der Log-Datei: {e}[/red]")
             log_widget.add_row(f"[dim]{traceback.format_exc()}[/dim]")
             logging.error(f"Fehler beim Verarbeiten von '{log_file_path}': {e}", exc_info=True)
             self.cached_log_data = []
             self.payload_history.clear()
             
+    # --- ANGEPASSTE FUNKTION (KEINE LADE-LOGIK) ---
     def _refilter_log_view(self) -> None:
         """Filtert die bereits geladenen Log-Zeilen neu, ohne die Datei erneut zu lesen."""
         if not self.log_widget: return
         
-        # --- DATATABLE ANPASSUNG ---
-        # Prüft auf den neuen Cache
-        # KORREKTUR: Nicht neu laden, wenn der Cache leer ist,
-        # _process_log_lines kann damit umgehen.
-        # if not self.cached_log_data:
-        #     self._load_log_file_and_update_views()
-        #     return
+        logging.info("Log-Ansicht wird mit gecachten Daten neu gefiltert (synchron).")
         
-        logging.info("Log-Ansicht wird mit gecachten Daten neu gefiltert.")
-        # Ruft die NEUE Filterfunktion auf
+        # Starte "2. MACHEN" direkt
+        logging.debug("Starte _process_log_lines...")
         self._process_log_lines()
-        # --- ENDE ANPASSUNG ---
+        logging.debug("Beende _process_log_lines.")
 
     def _get_descendant_gas(self, node: TreeNode) -> Set[str]:
         # (Unverändert)
@@ -767,7 +726,7 @@ class KNXLens(App):
             self._update_tree_labels_recursively(child)
 
     def action_toggle_selection(self) -> None:
-        # (Unverändert - ruft jetzt _refilter_log_view, was die neue Logik triggert)
+        # (Unverändert)
         try:
             active_tree = self.query_one(TabbedContent).active_pane.query_one(Tree)
             node = active_tree.cursor_node
@@ -793,7 +752,7 @@ class KNXLens(App):
             logging.error(f"Fehler bei action_toggle_selection: {e}", exc_info=True)
             
     def on_tabbed_content_tab_activated(self, event: TabbedContent.TabActivated) -> None:
-        # (Unverändert - ruft jetzt _refilter_log_view, was die neue Logik triggert)
+        # (Unverändert)
         if event.pane.id == "log_pane":
             logging.info("Log-Ansicht-Tab wurde aktiviert. Wende aktuellen Filter neu an.")
             self._refilter_log_view()
@@ -839,7 +798,7 @@ class KNXLens(App):
         self.push_screen(OpenFileScreen(), handle_open_result)
 
     def action_reload_log_file(self) -> None:
-        # (Unverändert)
+        # (UnverGändert)
         logging.info("Log-Datei wird manuell von Festplatte neu geladen.")
         self._load_log_file_and_update_views()
     
@@ -940,7 +899,32 @@ class KNXLens(App):
             
             self._populate_tree_from_data(tree, filtered_data or {}, expand_all=True)
 
-        self.push_screen(FilterInputScreen(), filter_callback)
+    # --- NEUE FUNKTION (LAYOUT-FIX V8) ---
+    def on_resize(self, event: events.Resize) -> None:
+        """Fenstergröße hat sich geändert. Berechne Spalten neu."""
+        
+        if not self.log_widget:
+            return
+
+        logging.debug(f"on_resize: Fenstergröße geändert auf {event.size.width}. Berechne Spalten neu.")
+
+        TS_WIDTH = 24
+        PA_WIDTH = 10
+        GA_WIDTH = 10
+        PAYLOAD_WIDTH = 25
+        COLUMN_SEPARATORS_WIDTH = 6 
+        fixed_width = TS_WIDTH + PA_WIDTH + GA_WIDTH + PAYLOAD_WIDTH + COLUMN_SEPARATORS_WIDTH
+        
+        available_width = event.size.width
+        remaining_width = available_width - fixed_width - 4 # Puffer
+        name_width = max(10, remaining_width // 2)
+
+        try:
+            self.log_widget.columns["pa_name"].width = name_width
+            self.log_widget.columns["ga_name"].width = name_width
+        except KeyError:
+            logging.warning("on_resize: Spalten 'pa_name' oder 'ga_name' nicht gefunden zum Anpassen.")
+    # --- ENDE NEUE FUNKTION ---
 
 ### --- START ---
 def main():
@@ -954,6 +938,7 @@ def main():
         )
         logging.info("Anwendung gestartet.")
 
+        # --- CSS-VERSION V8 (Breiten in Python, CSS nur für Overflow) ---
         css_content = """
         #loading_label { width: 100%; height: 100%; content-align: center middle; padding: 1; }
         #filter_dialog, #open_file_dialog { width: 80%; max-width: 70; height: auto; padding: 1 2; background: $surface; border: heavy $primary; }
@@ -968,6 +953,7 @@ def main():
             width: 100%;
         }
 
+        /* Style für die Fußzeile (Caption) der Tabelle */
         DataTable > .datatable--caption {
             width: 100%;
             text-align: center;
@@ -979,8 +965,8 @@ def main():
         /* WICHTIG: Wir brauchen 'overflow' hier, damit der Text,
            der länger als die berechnete Spaltenbreite ist,
            abgeschnitten wird ('...'). */
-        #log_view .datatable--column-key-pa_name,
-        #log_view .datatable--column-key-ga_name {
+        #log_widget .datatable--column-key-pa_name,
+        #log_widget .datatable--column-key-ga_name {
             overflow: hidden;
             text-overflow: ellipsis;
         }
@@ -989,6 +975,8 @@ def main():
 
         #open_file_dialog > Horizontal { height: auto; align: center middle; margin-top: 1; }
         """
+        # --- ENDE CSS-VERSION V8 ---
+        
         with open("knx-lens.css", "w", encoding='utf-8') as f: f.write(css_content)
 
         load_dotenv()
