@@ -174,6 +174,7 @@ python knx-lens.py
 | c        | Copy               | Copies the clean name of the current node to the clipboard.                  |
 | d        | Display Mode       | Toggles the display mode of received data.                                   |
 | f        | Filter tree        | Opens an input field to filter the current tree view.                        |
+| i        | Time Filter        | Filters for a certain time-range (improves performance)                      |
 | o        | Open log file      | Opens a dialog to load a new log file.                                       |
 | r        | Reload log         | Manually reloads the current log file to show changes.                       |
 | t        | Toggle auto-reload | Toggles the automatic reloading of the log file on or off.                   |
