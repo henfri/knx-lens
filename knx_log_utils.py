@@ -9,7 +9,10 @@ Wird von knx-lens.py importiert.
 import csv
 import re
 import logging
+# --- HINZUGEFÜGT ---
+from datetime import datetime, time as datetime_time
 from typing import Dict, List, Any, Optional, Tuple
+# --- ENDE HINZUGEFÜGT ---
 
 def detect_log_format(first_lines: List[str]) -> Optional[str]:
     """Erkennt das Format einer Log-Datei (pipe oder csv)."""
@@ -22,10 +25,19 @@ def detect_log_format(first_lines: List[str]) -> Optional[str]:
             return 'csv'
     return None
 
-def parse_and_cache_log_data(lines: List[str], project_data: Dict) -> Tuple[Dict[str, List[Dict[str, str]]], List[Dict[str, str]]]:
+# --- FUNKTIONS-SIGNATUR GEÄNDERT ---
+def parse_and_cache_log_data(
+    lines: List[str], 
+    project_data: Dict, 
+    time_filter_start: Optional[datetime_time] = None, 
+    time_filter_end: Optional[datetime_time] = None
+) -> Tuple[Dict[str, List[Dict[str, str]]], List[Dict[str, str]]]:
+# --- ENDE ÄNDERUNG ---
     """
     Parst die Log-Datei, aktualisiert das `payload_history` UND
     baut den `cached_log_data` Cache mit angereicherten Daten auf.
+    
+    Wendet optional einen Zeitfilter an.
     
     Gibt (payload_history, cached_log_data) zurück.
     """
@@ -42,6 +54,10 @@ def parse_and_cache_log_data(lines: List[str], project_data: Dict) -> Tuple[Dict
     # Hole Dictionaries für schnellen Lookup
     devices_dict = project_data.get("devices", {})
     ga_dict = project_data.get("group_addresses", {})
+    
+    # --- HINZUGEFÜGT: Zeitfilter-Prüfung ---
+    has_time_filter = time_filter_start or time_filter_end
+    # --- ENDE HINZUGEFÜGT ---
 
     for line in lines:
         clean_line = line.strip()
@@ -68,6 +84,24 @@ def parse_and_cache_log_data(lines: List[str], project_data: Dict) -> Tuple[Dict
             
             if timestamp and ga and re.match(r'\d+/\d+/\d+', ga):
                 
+                # --- HINZUGEFÜGT: Zeitfilter-Anwendung ---
+                if has_time_filter:
+                    try:
+                        # Parse den vollen Timestamp (z.B. "2025-11-12 18:51:00.009")
+                        # Wir nehmen an, das Format ist immer [YYYY-MM-DD HH:MM:SS.ms]
+                        log_datetime = datetime.strptime(timestamp.split('.')[0], "%Y-%m-%d %H:%M:%S")
+                        log_time = log_datetime.time()
+                        
+                        if time_filter_start and log_time < time_filter_start:
+                            continue # Zu früh, Zeile überspringen
+                        if time_filter_end and log_time > time_filter_end:
+                            continue # Zu spät, Zeile überspringen
+                            
+                    except ValueError:
+                        logging.debug(f"Konnte Timestamp für Zeitfilter nicht parsen: {timestamp}")
+                        continue # Sicherheitshalber überspringen
+                # --- ENDE HINZUGEFÜGT ---
+
                 # 1. Payload History (NUR wenn Payload existiert)
                 if payload is not None:
                     if ga not in payload_history:

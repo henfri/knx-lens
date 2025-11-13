@@ -15,6 +15,9 @@ import zipfile
 import io
 import logging
 import time
+# --- HINZUGEFÜGT ---
+from datetime import datetime, time as datetime_time
+# --- ENDE HINZUGEFÜGT ---
 from pathlib import Path
 from typing import Dict, List, Any, Optional, Set, Tuple
 
@@ -46,8 +49,6 @@ TreeData = Dict[str, Any]
 MAX_LOG_LINES_NO_FILTER = 5000  # Performance-Fix
 
 ### --- TUI: SCREENS & MODALS ---
-# (Diese sind klein genug, um sie hier zu lassen,
-#  oder könnten in 'knx_tui_screens.py' ausgelagert werden)
 
 class FilterInputScreen(ModalScreen[str]):
     """Ein modaler Bildschirm für die Filtereingabe."""
@@ -85,6 +86,40 @@ class OpenFileScreen(ModalScreen[Tuple[str, bool]]):
         elif event.button.id == "open_save":
             self.dismiss((path, True))
 
+# --- HINZUGEFÜGT: TimeFilterScreen ---
+class TimeFilterScreen(ModalScreen[Tuple[Optional[str], Optional[str]]]):
+    """Ein modaler Bildschirm für den Zeitfilter."""
+    
+    def __init__(self, start_val: Optional[str], end_val: Optional[str]):
+        super().__init__()
+        self.start_val = start_val or ""
+        self.end_val = end_val or ""
+
+    def compose(self) -> ComposeResult:
+        yield Center(Vertical(
+            Label("Log nach Zeit filtern (z.B. 10:30 oder 10:30:15):"),
+            Label("Leer lassen, um Filter zu deaktivieren."),
+            Input(placeholder="Startzeit (HH:MM)", id="start_input", value=self.start_val),
+            Input(placeholder="Endzeit (HH:MM)", id="end_input", value=self.end_val),
+            Horizontal(
+                Button("Filtern", variant="success", id="apply_filter"),
+                Button("Abbrechen", variant="error", id="cancel"),
+            ),
+            id="time_filter_dialog" 
+        ))
+    
+    def on_mount(self) -> None: 
+        self.query_one("#start_input", Input).focus()
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "cancel":
+            self.dismiss((None, None)) # Signalisiert Abbruch
+        elif event.button.id == "apply_filter":
+            start = self.query_one("#start_input").value
+            end = self.query_one("#end_input").value
+            self.dismiss((start, end))
+# --- ENDE HINZUGEFÜGT ---
+
 ### --- TUI: HAUPTANWENDUNG ---
 class KNXLens(App):
     CSS_PATH = "knx-lens.css"
@@ -96,6 +131,7 @@ class KNXLens(App):
         Binding("o", "open_log_file", "Log öffnen"),
         Binding("r", "reload_log_file", "Log neu laden"),
         Binding("t", "toggle_log_reload", "Auto-Reload Log"),
+        Binding("i", "time_filter", "Zeitfilter"), # <-- HINZUGEFÜGT
         Binding("escape", "reset_filter", "Auswahl zurücksetzen", show=True),
     ]
 
@@ -112,6 +148,11 @@ class KNXLens(App):
         self.log_reload_timer: Optional[Timer] = None
         self.payload_history: Dict[str, List[Dict[str, str]]] = {}
         self.cached_log_data: List[Dict[str, str]] = []
+        
+        # --- HINZUGEFÜGT ---
+        self.time_filter_start: Optional[datetime_time] = None
+        self.time_filter_end: Optional[datetime_time] = None
+        # --- ENDE HINZUGEFÜGT ---
 
 
     def compose(self) -> ComposeResult:
@@ -320,10 +361,17 @@ class KNXLens(App):
                 with open(log_file_path, 'r', encoding='utf-8') as f:
                     lines = f.readlines()
             
-            # --- VERWENDET IMPORTIERTE FUNKTION ---
+            # --- VERWENDET IMPORTIERTE FUNKTION (MIT FILTER) ---
             logging.debug("Starte parse_and_cache_log_data...")
-            self.payload_history, self.cached_log_data = parse_and_cache_log_data(lines, self.project_data)
+            # Übergibt die Zeitfilter-Werte an die Logik-Funktion
+            self.payload_history, self.cached_log_data = parse_and_cache_log_data(
+                lines, 
+                self.project_data,
+                self.time_filter_start,
+                self.time_filter_end
+            )
             logging.debug("Beende parse_and_cache_log_data.")
+            # --- ENDE ÄNDERUNG ---
             
             logging.debug("Aktualisiere Baum-Labels...")
             for tree in self.query(Tree):
@@ -333,7 +381,6 @@ class KNXLens(App):
             logging.debug("Starte _process_log_lines...")
             self._process_log_lines()
             logging.debug("Beende _process_log_lines.")
-            # --- ENDE ANPASSUNG ---
 
             duration = time.time() - start_time
             logging.info(f"Log-Datei '{os.path.basename(log_file_path)}' in {duration:.2f}s gelesen und verarbeitet.")
@@ -489,6 +536,69 @@ class KNXLens(App):
             self.log_reload_timer = self.set_interval(1, self._load_log_file_and_update_views)
             self.notify("Log Auto-Reload [bold green]EIN[/].", title="Log Ansicht")
             logging.info("Auto-Reload für Log-Datei im 1-Sekunden-Intervall aktiviert.")
+
+    # --- HINZUGEFÜGT: action_time_filter ---
+    def action_time_filter(self) -> None:
+        """Öffnet den Zeitfilter-Dialog."""
+        
+        def parse_time_input(time_str: str) -> Optional[datetime_time]:
+            """Parst HH:MM oder HH:MM:SS Eingaben."""
+            if not time_str:
+                return None
+            try:
+                # Versuche HH:MM:SS
+                return datetime.strptime(time_str, "%H:%M:%S").time()
+            except ValueError:
+                try:
+                    # Versuche HH:MM
+                    return datetime.strptime(time_str, "%H:%M").time()
+                except ValueError:
+                    self.notify(f"Ungültiges Zeitformat: '{time_str}'. Bitte HH:MM oder HH:MM:SS verwenden.",
+                                severity="error", timeout=5)
+                    return None # Signalisiert ungültige Eingabe
+
+        def handle_filter_result(result: Tuple[Optional[str], Optional[str]]):
+            start_str, end_str = result
+            
+            # (None, None) signalisiert "Abbrechen", nichts tun
+            if start_str is None and end_str is None:
+                self.notify("Zeitfilterung abgebrochen.")
+                return
+
+            # Erfolgreich, validiere Eingaben
+            new_start = parse_time_input(start_str) if start_str else None
+            new_end = parse_time_input(end_str) if end_str else None
+            
+            # Edge Case: parse_time_input gab 'None' zurück wegen Fehler
+            if (start_str and new_start is None) or \
+               (end_str and new_end is None):
+                # Die Fehlermeldung kam schon von parse_time_input
+                # Ändere *nicht* die Filterwerte
+                return
+
+            # Werte erfolgreich geparst, übernehme sie
+            self.time_filter_start = new_start
+            self.time_filter_end = new_end
+            
+            # Logge und lade neu
+            if self.time_filter_start or self.time_filter_end:
+                start_log = self.time_filter_start.strftime('%H:%M:%S') if self.time_filter_start else "Anfang"
+                end_log = self.time_filter_end.strftime('%H:%M:%S') if self.time_filter_end else "Ende"
+                logging.info(f"Zeitfilter gesetzt: {start_log} -> {end_log}")
+                self.notify(f"Zeitfilter aktiv: {start_log} -> {end_log}")
+            else:
+                logging.info("Zeitfilter entfernt.")
+                self.notify("Zeitfilter entfernt.")
+            
+            # Lade das Log mit dem neuen Filter neu
+            self._load_log_file_and_update_views()
+
+        # Aktuelle Werte für das Modal-Fenster formatieren
+        start_val = self.time_filter_start.strftime('%H:%M:%S') if self.time_filter_start else ""
+        end_val = self.time_filter_end.strftime('%H:%M:%S') if self.time_filter_end else ""
+        
+        self.push_screen(TimeFilterScreen(start_val, end_val), handle_filter_result)
+    # --- ENDE HINZUGEFÜGT ---
 
     def _filter_tree_data(self, original_data: TreeData, filter_text: str) -> Tuple[Optional[TreeData], bool]:
         if not original_data: return None, False
