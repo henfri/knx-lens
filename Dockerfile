@@ -20,11 +20,12 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Kopieren Sie alle Ihre Python-Anwendungsskripte
-COPY *.py .
+COPY knx-lens.css .
 
-# Setzen Sie Berechtigungen für die Skripte und weisen Sie den Besitz zu
-RUN chmod +x *.py \
-    && chown appuser:appuser *.py
+# Setzen Sie Berechtigungen (nur das Hauptskript muss ausführbar sein)
+# und weisen Sie dem App-Benutzer den Besitz aller App-Dateien zu
+RUN chmod +x knx-lens.py \
+    && chown appuser:appuser *.py knx-lens.css
 
 # Wechseln Sie zum Nicht-Root-Benutzer
 USER appuser
