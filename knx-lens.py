@@ -416,22 +416,26 @@ class KNXLens(App):
             # Fallback für Knoten ohne unsere Daten (oder Datei-Knoten)
             display_label = re.sub(r"^(\[[ *\-]] )+", "", str(node.label))
 
-        prefix = ""
+        # Standard ist "[ ] ", damit die Einrückung stimmt, auch wenn keine GAs da sind.
+        prefix = "[ ] "
+        
         all_descendant_gas = self._get_descendant_gas(node)
         if all_descendant_gas:
             selected_descendant_gas = self.selected_gas.intersection(all_descendant_gas)
-            if not selected_descendant_gas: 
-                prefix = "[ ] "
-            elif len(selected_descendant_gas) == len(all_descendant_gas): 
+            if len(selected_descendant_gas) == len(all_descendant_gas): 
                 prefix = "[*] "
-            else: 
+            elif selected_descendant_gas: 
                 prefix = "[-] "
+            else: 
+                prefix = "[ ] "
 
-        # Nur Label setzen, wenn es sich geändert hat (Performance) oder wir erzwingen wollen
         node.set_label(prefix + display_label)
 
         for child in node.children:
             self._update_tree_labels_recursively(child)
+
+
+
     def action_toggle_selection(self) -> None:
         try:
             active_tree = self.query_one(TabbedContent).active_pane.query_one(Tree)
