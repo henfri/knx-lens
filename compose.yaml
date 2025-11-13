@@ -10,6 +10,8 @@ services:
       # Mountet lokale Verzeichnisse in den Container
       - ${DOCKERCONFIG}/knx-lens/logs:/app/logs
       - ${DOCKERCONFIG}/knx-lens/project:/app/project
+      - /etc/timezone:/etc/timezone:ro
+      - /etc/localtime:/etc/localtime:ro
     env_file:
       - .env
     restart: unless-stopped
