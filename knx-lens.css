@@ -4,42 +4,32 @@
         #filter_dialog > Label, #open_file_dialog > Label { margin-bottom: 1; }
         #filter_input, #path_input { background: $boost; }
         
-        /* --- KORREKTUR: Scrolling-Verhalten (Neuer Versuch) --- */
-        
-        /* 1. Sagt dem Tab-Container, dass er den restlichen Platz füllen soll. */
-        /* Dies behebt das Problem, dass die Tabs "mitscrollen". */
         TabbedContent {
             height: 1fr;
         }
-        
-        /* 2. Sagt den Widgets (Bäume + Tabelle), dass sie die TabPane füllen sollen. */
-        /* ... */
-        /* --- KORREKTUR: Diese Regel hat den Fehler verursacht und wird entfernt ---
-        #log_view, #building_tree, #pa_tree, #ga_tree {
-            height: 100%;
-        }
-        */
-        /* --- ENDE KORREKTUR --- */
 
-        /* Style für die Fußzeile (Caption) der Tabelle */
+        #log_view {
+            width: 100%;
+        }
+
         DataTable > .datatable--caption {
             width: 100%;
             text-align: center;
             color: $text-muted;
         }
 
-        /* --- KORREKTUR: Spaltenbreiten --- */
-        /* Alle Spalten "auto" (so schmal wie möglich), mit Obergrenzen. */
-        /* Dies verhindert horizontales Scrollen und erzwingt stattdessen Textumbruch. */
-        #log_view .datatable--column-key-ts        { width: auto; max-width: 25; }
-        #log_view .datatable--column-key-pa        { width: auto; max-width: 12; }
-        #log_view .datatable--column-key-ga        { width: auto; max-width: 12; }
-        #log_view .datatable--column-key-payload   { width: auto; max-width: 20; }
+        /* --- LÖSUNG (V8): Breiten werden in Python berechnet --- */
         
-        /* Die Namensspalten bekommen auch "auto", damit sie sich anpassen, anstatt 1fr zu fordern. */
-        #log_view .datatable--column-key-pa_name   { width: auto; } 
-        #log_view .datatable--column-key-ga_name   { width: auto; }
-        /* --- ENDE KORREKTUR --- */
+        /* WICHTIG: Wir brauchen 'overflow' hier, damit der Text,
+           der länger als die berechnete Spaltenbreite ist,
+           abgeschnitten wird ('...'). */
+        #log_view .datatable--column-key-pa_name,
+        #log_view .datatable--column-key-ga_name {
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        /* Alle 'width:'-Definitionen für Spalten sind entfernt. */
+        /* --- ENDE DER LÖSUNG --- */
 
         #open_file_dialog > Horizontal { height: auto; align: center middle; margin-top: 1; }
         

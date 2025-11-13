@@ -44,8 +44,9 @@ from xknxproject import XKNXProj
 
 ### --- SETUP & KONSTANTEN ---
 # Anpassbares Log-Level (Optionen: logging.DEBUG, logging.INFO, logging.WARNING, logging.ERROR)
-LOG_LEVEL = logging.INFO
+LOG_LEVEL = logging.DEBUG
 TreeData = Dict[str, Any]
+MAX_LOG_LINES_NO_FILTER = 5000
 
 ### --- KERNLOGIK: PARSING & DATENSTRUKTURIERUNG ---
 # (Unverändert)
@@ -370,10 +371,12 @@ class KNXLens(App):
             self.call_from_thread(self.on_data_loaded)
         except Exception as e:
             self.call_from_thread(self.show_startup_error, e, traceback.format_exc())
-    
+
     def on_data_loaded(self) -> None:
+        logging.debug("on_data_loaded: Beginne mit UI-Aufbau.")
         try:
             # Entferne den *gesamten* Lade-Container
+            logging.debug("on_data_loaded: Entferne Lade-Container.")
             loading_container = self.query_one("#loading_container")
             loading_container.remove()
             
@@ -387,13 +390,38 @@ class KNXLens(App):
             self.log_widget = DataTable(id="log_view")
             self.log_widget.cursor_type = "row"
 
-            # Spalten-Breiten werden jetzt via CSS (in main()) gesteuert
-            self.log_widget.add_column("Timestamp", key="ts")
-            self.log_widget.add_column("PA", key="pa")
-            self.log_widget.add_column("Gerät (PA)", key="pa_name")
-            self.log_widget.add_column("GA", key="ga")
-            self.log_widget.add_column("Gruppenadresse (GA)", key="ga_name")
-            self.log_widget.add_column("Payload", key="payload")
+            # --- NEUE LÖSUNG: Manuelle Breitenberechnung ---
+            
+            # Feste Breiten für Datenspalten
+            TS_WIDTH = 24
+            PA_WIDTH = 10
+            GA_WIDTH = 10
+            PAYLOAD_WIDTH = 25
+            
+            # Platz für Spaltentrenner (ca. 1 pro Spalte)
+            COLUMN_SEPARATORS_WIDTH = 6 
+            
+            fixed_width = TS_WIDTH + PA_WIDTH + GA_WIDTH + PAYLOAD_WIDTH + COLUMN_SEPARATORS_WIDTH
+            
+            # Verfügbare Breite für die beiden Namensspalten
+            # Wir nehmen die volle Terminalbreite
+            available_width = self.app.size.width
+            remaining_width = available_width - fixed_width
+            
+            # Aufteilen auf 2 Spalten, Mindestbreite 10
+            name_width = max(10, remaining_width // 2)
+            
+            logging.debug(f"on_data_loaded: Terminalbreite={self.app.size.width}, Fix={fixed_width}, Rest={remaining_width}, NameWidth={name_width}")
+
+            # Spalten mit *festen* Breiten hinzufügen
+            self.log_widget.add_column("Timestamp", key="ts", width=TS_WIDTH)
+            self.log_widget.add_column("PA", key="pa", width=PA_WIDTH)
+            self.log_widget.add_column("Gerät (PA)", key="pa_name", width=name_width) # <-- Manuell
+            self.log_widget.add_column("GA", key="ga", width=GA_WIDTH)
+            self.log_widget.add_column("Gruppenadresse (GA)", key="ga_name", width=name_width) # <-- Manuell
+            self.log_widget.add_column("Payload", key="payload", width=PAYLOAD_WIDTH)
+            
+            # --- ENDE DER NEUEN LÖSUNG ---
 
             tabs.add_pane(TabPane("Gebäudestruktur", building_tree, id="building_pane"))
             tabs.add_pane(TabPane("Physikalische Adressen", pa_tree, id="pa_pane"))
@@ -401,16 +429,23 @@ class KNXLens(App):
             # Wichtig: Die TabPane bekommt eine ID für das Scrolling
             tabs.add_pane(TabPane("Log-Ansicht", self.log_widget, id="log_pane"))
             
+            logging.debug("on_data_loaded: Populiere 'building_tree'...")
             self._populate_tree_from_data(building_tree, self.building_tree_data)
+            logging.debug("on_data_loaded: Populiere 'pa_tree'...")
             self._populate_tree_from_data(pa_tree, self.pa_tree_data)
+            logging.debug("on_data_loaded: Populiere 'ga_tree'...")
             self._populate_tree_from_data(ga_tree, self.ga_tree_data)
+            logging.debug("on_data_loaded: Bäume popoluiert. UI ist fast fertig.")
 
             tabs.disabled = False
             self.call_later(self._load_log_file_and_update_views)
         except Exception as e:
+            logging.error(f"on_data_loaded: Kritischer Fehler beim UI-Aufbau: {e}", exc_info=True) 
             self.show_startup_error(e, traceback.format_exc())
 
+
     def _populate_tree_from_data(self, tree: Tree, data: TreeData, expand_all: bool = False):
+        logging.debug(f"_populate_tree_from_data: Starte für Baum '{tree.id or 'unbekannt'}'.")  # <-- HINZUGEFÜGT
         # (Unverändert)
         tree.clear()
         def natural_sort_key(item: Tuple[str, Any]):
@@ -427,7 +462,9 @@ class KNXLens(App):
         if data and "children" in data:
             add_nodes(tree.root, data["children"])
         
+        logging.debug(f"_populate_tree_from_data: '{tree.id or 'unbekannt'}' Knoten hinzugefügt. Starte rekursives Label-Update...")  # <-- HINZUGEFÜGT
         self._update_tree_labels_recursively(tree.root)
+        logging.debug(f"_populate_tree_from_data: '{tree.id or 'unbekannt'}' Label-Update beendet.")  # <-- HINZUGEFÜGT
         
         tree.root.collapse_all()
         if expand_all:
@@ -525,11 +562,7 @@ class KNXLens(App):
         for ga in self.payload_history:
             self.payload_history[ga].sort(key=lambda x: x['timestamp'])
 
-    # --- DATATABLE ANPASSUNG ---
-    # Diese Funktion wurde komplett umgeschrieben.
-    # Sie liest nicht mehr die Zeilen, sondern filtert nur noch
-    # die vor-verarbeiteten Daten aus `self.cached_log_data`.
-    # Sie nimmt daher auch keine 'lines' mehr als Argument.
+
     def _process_log_lines(self):
         """
         Filtert die in `self.cached_log_data` zwischengespeicherten,
@@ -552,6 +585,10 @@ class KNXLens(App):
         start_time = time.time()
         
         log_caption = ""
+        
+        # --- HIER IST DIE ÄNDERUNG ---
+        log_entries_to_process = self.cached_log_data
+        
         if has_selection:
             sorted_gas = sorted(list(self.selected_gas))
             filter_info = f"Filtere Log für {len(sorted_gas)} GAs: {', '.join(sorted_gas)}"
@@ -559,42 +596,42 @@ class KNXLens(App):
             log_caption = f"Filter aktiv ({len(sorted_gas)} GAs)"
         else:
             logging.info("Keine Auswahl. Zeige alle Log-Einträge.")
-            log_caption = "Alle Einträge"
+            if len(self.cached_log_data) > MAX_LOG_LINES_NO_FILTER:
+                # Nimm nur die letzten X Einträge (die neuesten)
+                log_entries_to_process = self.cached_log_data[-MAX_LOG_LINES_NO_FILTER:]
+                log_caption = f"Alle Einträge (Letzte {MAX_LOG_LINES_NO_FILTER} von {len(self.cached_log_data)} angezeigt)"
+                logging.warning(f"Kein Filter aktiv. Zeige nur die letzten {MAX_LOG_LINES_NO_FILTER} von {len(self.cached_log_data)} Log-Einträgen.")
+            else:
+                log_caption = f"Alle Einträge ({len(self.cached_log_data)})"
+        # --- ENDE DER ÄNDERUNG ---
 
         found_count = 0
         
-        # Iteriere über die vor-verarbeiteten, angereicherten Daten
-        # Dies ist extrem schnell, da keine String-Operationen oder Lookups mehr nötig sind.
-        for i, log_entry in enumerate(self.cached_log_data):
+
+        rows_to_add = []
+        for i, log_entry in enumerate(log_entries_to_process):
             
             # Überspringe die Zeile nur, WENN eine Auswahl existiert
             # UND die GA der Zeile NICHT in der Auswahl ist.
             if has_selection and log_entry["ga"] not in self.selected_gas:
                 continue # Überspringen
 
-            # Wenn wir hier ankommen, ist entweder:
-            # 1. Keine Auswahl getroffen (has_selection == False) -> Zeile anzeigen
-            # 2. Auswahl getroffen (has_selection == True) UND die GA passt -> Zeile anzeigen
-            self.log_widget.add_row(
+            # Wir bauen die Zeile explizit mit den Spalten-Keys auf,
+            # die wir in 'on_data_loaded' definiert haben.
+            rows_to_add.append((
                 log_entry["timestamp"],
                 log_entry["pa"],
-                log_entry["pa_name"], # Angereicherter Name
+                log_entry["pa_name"],
                 log_entry["ga"],
-                log_entry["ga_name"], # Angereicherter Name
-                log_entry["payload"],
-                key=f"log_line_{i}"
-            )
-            # --- KORREKTUR: Einrückung korrigiert ---
+                log_entry["ga_name"],
+                log_entry["payload"]
+            ))
+            
             found_count += 1
-            # --- ENDE KORREKTUR ---
         
-        duration = time.time() - start_time
-        logging.info(f"Log-Ansicht gefiltert. {found_count} Einträge in {duration:.4f}s gefunden.")
-        # Info als "Caption" (Fußzeile) der Tabelle setzen
-        self.log_widget.caption = f"{found_count} Einträge gefunden. ({duration:.2f}s) | {log_caption}"
+        # Füge alle Zeilen auf einmal hinzu
+        self.log_widget.add_rows(rows_to_add)
 
-    # Die alte Funktion `_update_payload_history_from_log` wird nicht mehr benötigt,
-    # da ihre Logik in `_parse_and_cache_log_data` integriert wurde.
 
     def _load_log_file_and_update_views(self):
         """Liest die Log-Datei von der Festplatte, aktualisiert den Cache und alle Ansichten."""
@@ -917,53 +954,41 @@ def main():
         )
         logging.info("Anwendung gestartet.")
 
-        # CSS ist für DataTable angepasst
         css_content = """
         #loading_label { width: 100%; height: 100%; content-align: center middle; padding: 1; }
         #filter_dialog, #open_file_dialog { width: 80%; max-width: 70; height: auto; padding: 1 2; background: $surface; border: heavy $primary; }
         #filter_dialog > Label, #open_file_dialog > Label { margin-bottom: 1; }
         #filter_input, #path_input { background: $boost; }
         
-        /* --- KORREKTUR: Scrolling-Verhalten (Neuer Versuch) --- */
-        
-        /* 1. Sagt dem Tab-Container, dass er den restlichen Platz füllen soll. */
-        /* Dies behebt das Problem, dass die Tabs "mitscrollen". */
         TabbedContent {
             height: 1fr;
         }
-        
-        /* 2. Sagt den Widgets (Bäume + Tabelle), dass sie die TabPane füllen sollen. */
-        /* ... */
-        /* --- KORREKTUR: Diese Regel hat den Fehler verursacht und wird entfernt ---
-        #log_view, #building_tree, #pa_tree, #ga_tree {
-            height: 100%;
-        }
-        */
-        /* --- ENDE KORREKTUR --- */
 
-        /* Style für die Fußzeile (Caption) der Tabelle */
+        #log_view {
+            width: 100%;
+        }
+
         DataTable > .datatable--caption {
             width: 100%;
             text-align: center;
             color: $text-muted;
         }
 
-        /* --- KORREKTUR: Spaltenbreiten --- */
-        /* Alle Spalten "auto" (so schmal wie möglich), mit Obergrenzen. */
-        /* Dies verhindert horizontales Scrollen und erzwingt stattdessen Textumbruch. */
-        #log_view .datatable--column-key-ts        { width: auto; max-width: 25; }
-        #log_view .datatable--column-key-pa        { width: auto; max-width: 12; }
-        #log_view .datatable--column-key-ga        { width: auto; max-width: 12; }
-        #log_view .datatable--column-key-payload   { width: auto; max-width: 20; }
+        /* --- LÖSUNG (V8): Breiten werden in Python berechnet --- */
         
-        /* Die Namensspalten bekommen auch "auto", damit sie sich anpassen, anstatt 1fr zu fordern. */
-        #log_view .datatable--column-key-pa_name   { width: auto; } 
-        #log_view .datatable--column-key-ga_name   { width: auto; }
-        /* --- ENDE KORREKTUR --- */
+        /* WICHTIG: Wir brauchen 'overflow' hier, damit der Text,
+           der länger als die berechnete Spaltenbreite ist,
+           abgeschnitten wird ('...'). */
+        #log_view .datatable--column-key-pa_name,
+        #log_view .datatable--column-key-ga_name {
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        /* Alle 'width:'-Definitionen für Spalten sind entfernt. */
+        /* --- ENDE DER LÖSUNG --- */
 
         #open_file_dialog > Horizontal { height: auto; align: center middle; margin-top: 1; }
         """
-        
         with open("knx-lens.css", "w", encoding='utf-8') as f: f.write(css_content)
 
         load_dotenv()
