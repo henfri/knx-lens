@@ -9,10 +9,8 @@ Wird von knx-lens.py importiert.
 import csv
 import re
 import logging
-# --- HINZUGEFÜGT ---
 from datetime import datetime, time as datetime_time
 from typing import Dict, List, Any, Optional, Tuple
-# --- ENDE HINZUGEFÜGT ---
 
 def detect_log_format(first_lines: List[str]) -> Optional[str]:
     """Erkennt das Format einer Log-Datei (pipe oder csv)."""
@@ -25,43 +23,29 @@ def detect_log_format(first_lines: List[str]) -> Optional[str]:
             return 'csv'
     return None
 
-# --- FUNKTIONS-SIGNATUR GEÄNDERT ---
-def parse_and_cache_log_data(
+def _parse_lines_internal(
     lines: List[str], 
     project_data: Dict, 
+    log_format: str,
     time_filter_start: Optional[datetime_time] = None, 
     time_filter_end: Optional[datetime_time] = None
-) -> Tuple[Dict[str, List[Dict[str, str]]], List[Dict[str, str]]]:
-# --- ENDE ÄNDERUNG ---
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, str]]]:
     """
-    Parst die Log-Datei, aktualisiert das `payload_history` UND
-    baut den `cached_log_data` Cache mit angereicherten Daten auf.
-    
-    Wendet optional einen Zeitfilter an.
-    
-    Gibt (payload_history, cached_log_data) zurück.
+    Interne Parsing-Engine. 
+    Gibt (neue_payload_einträge, neue_cache_einträge) zurück.
     """
-    # Lokale Dictionaries, die zurückgegeben werden
-    payload_history: Dict[str, List[Dict[str, str]]] = {}
-    cached_log_data: List[Dict[str, str]] = []
     
-    first_content_lines = [line for line in lines[:20] if line.strip() and not line.strip().startswith("=")]
-    log_format = detect_log_format(first_content_lines)
-    if not log_format:
-        logging.warning("Konnte Log-Format beim Parsen für Cache nicht bestimmen.")
-        return payload_history, cached_log_data
-
-    # Hole Dictionaries für schnellen Lookup
+    new_payload_items = []
+    new_cached_items = []
+    
     devices_dict = project_data.get("devices", {})
     ga_dict = project_data.get("group_addresses", {})
     
-    # --- HINZUGEFÜGT: Zeitfilter-Prüfung ---
     has_time_filter = time_filter_start or time_filter_end
-    # --- ENDE HINZUGEFÜGT ---
 
     for line in lines:
         clean_line = line.strip()
-        if not clean_line: continue
+        if not clean_line or clean_line.startswith("="): continue
         
         try:
             timestamp, pa, ga, payload = None, "N/A", None, None
@@ -84,35 +68,31 @@ def parse_and_cache_log_data(
             
             if timestamp and ga and re.match(r'\d+/\d+/\d+', ga):
                 
-                # --- HINZUGEFÜGT: Zeitfilter-Anwendung ---
                 if has_time_filter:
                     try:
-                        # Parse den vollen Timestamp (z.B. "2025-11-12 18:51:00.009")
-                        # Wir nehmen an, das Format ist immer [YYYY-MM-DD HH:MM:SS.ms]
-                        log_datetime = datetime.strptime(timestamp.split('.')[0], "%Y-%m-%d %H:%M:%S")
-                        log_time = log_datetime.time()
+                        time_str = timestamp.split(' ')[1].split('.')[0]
+                        log_time = datetime.strptime(time_str, "%H:%M:%S").time()
                         
                         if time_filter_start and log_time < time_filter_start:
-                            continue # Zu früh, Zeile überspringen
+                            continue 
                         if time_filter_end and log_time > time_filter_end:
-                            continue # Zu spät, Zeile überspringen
+                            continue
                             
-                    except ValueError:
+                    except (ValueError, IndexError):
                         logging.debug(f"Konnte Timestamp für Zeitfilter nicht parsen: {timestamp}")
-                        continue # Sicherheitshalber überspringen
-                # --- ENDE HINZUGEFÜGT ---
+                        continue
 
-                # 1. Payload History (NUR wenn Payload existiert)
                 if payload is not None:
-                    if ga not in payload_history:
-                        payload_history[ga] = []
-                    payload_history[ga].append({'timestamp': timestamp, 'payload': payload})
+                    new_payload_items.append({
+                        "ga": ga,
+                        "timestamp": timestamp,
+                        "payload": payload
+                    })
                 
-                # 2. Cache mit angereicherten Daten aufbauen (IMMER)
                 pa_name = devices_dict.get(pa, {}).get("name", "N/A")
                 ga_name = ga_dict.get(ga, {}).get("name", "N/A")
                 
-                cached_log_data.append({
+                new_cached_items.append({
                     "timestamp": timestamp,
                     "pa": pa,
                     "pa_name": pa_name,
@@ -124,9 +104,80 @@ def parse_and_cache_log_data(
         except (IndexError, StopIteration, csv.Error) as e:
             logging.debug(f"Konnte Log-Zeile nicht parsen: '{clean_line}' - Fehler: {e}")
             continue
+            
+    return new_payload_items, new_cached_items
+
+def parse_and_cache_log_data(
+    lines: List[str], 
+    project_data: Dict, 
+    time_filter_start: Optional[datetime_time] = None, 
+    time_filter_end: Optional[datetime_time] = None
+) -> Tuple[Dict[str, List[Dict[str, str]]], List[Dict[str, str]]]:
+    """
+    [VOLLSTÄNDIGER RELOAD]
+    Parst die Log-Datei, baut das `payload_history` UND
+    den `cached_log_data` Cache komplett neu auf.
+    Gibt (payload_history, cached_log_data) zurück.
+    """
+    payload_history: Dict[str, List[Dict[str, str]]] = {}
+    cached_log_data: List[Dict[str, str]] = []
     
-    # Payload History sortieren
+    first_content_lines = [line for line in lines[:20] if line.strip() and not line.strip().startswith("=")]
+    log_format = detect_log_format(first_content_lines)
+    if not log_format:
+        logging.warning("Konnte Log-Format beim Parsen für Cache nicht bestimmen.")
+        return payload_history, cached_log_data
+
+    new_payload_items, new_cached_items = _parse_lines_internal(
+        lines, project_data, log_format, time_filter_start, time_filter_end
+    )
+    
+    cached_log_data = new_cached_items
+    for item in new_payload_items:
+        ga = item["ga"]
+        if ga not in payload_history:
+            payload_history[ga] = []
+        payload_history[ga].append({'timestamp': item["timestamp"], 'payload': item["payload"]})
+
     for ga in payload_history:
         payload_history[ga].sort(key=lambda x: x['timestamp'])
 
     return payload_history, cached_log_data
+
+# --- FUNKTION GEÄNDERT: GIBT JETZT NEUE ZEILEN ZURÜCK ---
+def append_new_log_lines(
+    lines: List[str], 
+    project_data: Dict, 
+    payload_history: Dict[str, List[Dict[str, str]]],
+    cached_log_data: List[Dict[str, str]],
+    time_filter_start: Optional[datetime_time] = None, 
+    time_filter_end: Optional[datetime_time] = None
+) -> List[Dict[str, str]]: # <-- Rückgabetyp geändert
+    """
+    [DELTA-RELOAD]
+    Parst nur neue Zeilen, hängt sie an die Listen an UND
+    GIBT die neuen Cache-Einträge zurück.
+    """
+    
+    log_format = detect_log_format(lines[:20])
+    if not log_format:
+        if cached_log_data:
+            first_entry = cached_log_data[0]
+            simulated_line = f"{first_entry['timestamp']} | {first_entry['pa']} | | {first_entry['ga']} | | {first_entry['payload']}"
+            log_format = detect_log_format([simulated_line])
+    if not log_format:
+        logging.warning("Konnte Log-Format für Delta-Update nicht bestimmen.")
+        return [] # Leere Liste zurückgeben
+
+    new_payload_items, new_cached_items = _parse_lines_internal(
+        lines, project_data, log_format, time_filter_start, time_filter_end
+    )
+    
+    cached_log_data.extend(new_cached_items)
+    for item in new_payload_items:
+        ga = item["ga"]
+        if ga not in payload_history:
+            payload_history[ga] = []
+        payload_history[ga].append({'timestamp': item["timestamp"], 'payload': item["payload"]})
+    
+    return new_cached_items # <-- Die neuen Zeilen zurückgeben

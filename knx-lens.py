@@ -12,6 +12,8 @@ import traceback
 import logging
 import time
 import re
+import zipfile
+import io
 from datetime import datetime, time as datetime_time
 from pathlib import Path
 from typing import Dict, List, Any, Optional, Set, Tuple
@@ -21,6 +23,7 @@ from dotenv import load_dotenv, set_key, find_dotenv
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Vertical
+# WICHTIG: Input widget importieren
 from textual.widgets import Header, Footer, Tree, Static, TabbedContent, TabPane, DataTable, DirectoryTree, Input
 from textual.widgets.tree import TreeNode
 from textual import events
@@ -33,14 +36,15 @@ from knx_project_utils import (
     build_pa_tree_data, 
     build_building_tree_data
 )
-from knx_log_utils import parse_and_cache_log_data
+# --- Import geändert ---
+from knx_log_utils import parse_and_cache_log_data, append_new_log_lines
 # Importiere Screens UND den neuen Tree
 from knx_tui_screens import FilterInputScreen, TimeFilterScreen, FilteredDirectoryTree
 # --- ENDE LOKALE IMPORTE ---
 
 
 ### --- SETUP & KONSTANTEN ---
-LOG_LEVEL = logging.DEBUG
+LOG_LEVEL = logging.INFO
 TreeData = Dict[str, Any]
 MAX_LOG_LINES_NO_FILTER = 5000
 
@@ -52,7 +56,7 @@ class KNXLens(App):
         Binding("a", "toggle_selection", "Auswahl"),
         Binding("c", "copy_label", "Kopieren"),
         Binding("f", "filter_tree", "Filtern"),
-        Binding("o", "open_log_file", "Dateien-Tab öffnen"), # Geändert
+        Binding("o", "open_log_file", "Dateien-Tab öffnen"),
         Binding("r", "reload_log_file", "Log neu laden"),
         Binding("t", "toggle_log_reload", "Auto-Reload Log"),
         Binding("i", "time_filter", "Zeitfilter"),
@@ -75,6 +79,11 @@ class KNXLens(App):
         
         self.time_filter_start: Optional[datetime_time] = None
         self.time_filter_end: Optional[datetime_time] = None
+
+        # --- NEU: Für effizientes Tailing ---
+        self.last_log_mtime: Optional[float] = None
+        self.last_log_position: int = 0
+        # --- ENDE NEU ---
 
 
     def compose(self) -> ComposeResult:
@@ -149,9 +158,7 @@ class KNXLens(App):
             tabs.add_pane(TabPane("Gruppenadressen", ga_tree, id="ga_pane"))
             tabs.add_pane(TabPane("Log-Ansicht", self.log_widget, id="log_pane"))
             
-            # --- Geändert: Container statt direktem Tree ---
             tabs.add_pane(TabPane("Dateien", file_browser_container, id="files_pane"))
-            # ---
 
             logging.debug("on_data_loaded: Populiere 'building_tree'...")
             self._populate_tree_from_data(building_tree, self.building_tree_data)
@@ -173,40 +180,51 @@ class KNXLens(App):
             logging.error(f"on_data_loaded: Kritischer Fehler beim UI-Aufbau: {e}", exc_info=True) 
             self.show_startup_error(e, traceback.format_exc())
 
-    # --- NEU: Handler für Pfad-Eingabe ---
     def on_input_submitted(self, event: Input.Submitted) -> None:
         """Wechselt das Verzeichnis des Datei-Browsers."""
         if event.input.id == "path_changer":
-            new_path = event.value
-            if os.path.isdir(new_path):
-                try:
-                    self.query_one("#file_browser", DirectoryTree).path = new_path
-                    self.notify(f"Verzeichnis gewechselt: {new_path}")
-                except Exception as e:
-                    self.notify(f"Fehler beim Wechseln: {e}", severity="error")
-            else:
-                self.notify(f"Verzeichnis nicht gefunden: {new_path}", severity="error")
-    # ---
-    # --- NEU: Handler für Datei-Auswahl im neuen Tab ---
+            # 1. Anführungszeichen entfernen
+            raw_input = event.value.strip().strip('"').strip("'")
+            
+            if not raw_input: return
+
+            target_path = raw_input
+            
+            try:
+                # 2. Prüfen, ob der Pfad direkt gültig ist
+                if not os.path.isdir(target_path):
+                    # 3. Wenn nicht, versuchen aufzulösen
+                    logging.debug(f"Pfad '{target_path}' nicht direkt gefunden, versuche resolve()")
+                    target_path = str(Path(raw_input).resolve())
+
+                # 4. Endgültige Prüfung
+                if os.path.isdir(target_path):
+                    self.query_one("#file_browser", DirectoryTree).path = target_path
+                    self.notify(f"Verzeichnis gewechselt: {target_path}")
+                else:
+                    if os.name == 'nt' and target_path.startswith(r'\\') and len(target_path.split(os.sep)) == 3:
+                         try:
+                            self.query_one("#file_browser", DirectoryTree).path = target_path
+                            self.notify(f"Server-Ansicht geöffnet: {target_path}")
+                         except Exception as e:
+                            self.notify(f"Fehler beim Laden von Server {target_path}: {e}", severity="error")
+                    else:
+                        self.notify(f"Verzeichnis nicht gefunden: {target_path}", severity="error")
+            except Exception as e:
+                self.notify(f"Pfad-Fehler: {e}", severity="error")
+    
     def on_directory_tree_file_selected(self, event: DirectoryTree.FileSelected) -> None:
         """Wird aufgerufen, wenn im Dateien-Tab eine Datei ausgewählt wird."""
         event.stop()
         file_path = str(event.path)
         
-        # Prüfen, ob wir diese Datei laden können
         if file_path.lower().endswith((".log", ".zip", ".txt")):
             self.notify(f"Lade Datei: {os.path.basename(file_path)}")
             self.config['log_file'] = file_path
             
-            # Ggf. als Standard speichern (optional, hier erstmal nur laden)
-            # dotenv_path = find_dotenv() or Path(".env")
-            # set_key(str(dotenv_path), "LOG_FILE", file_path, quote_mode="never")
-
             self._load_log_file_and_update_views()
             
-            # Automatisch zum Log-View springen
             self.query_one(TabbedContent).active = "log_pane"
-    # ---
 
     def _populate_tree_from_data(self, tree: Tree, data: TreeData, expand_all: bool = False):
         logging.debug(f"_populate_tree_from_data: Starte für Baum '{tree.id or 'unbekannt'}'.")
@@ -234,9 +252,19 @@ class KNXLens(App):
             tree.root.expand_all()
 
     def _process_log_lines(self):
+        """
+        Filtert die in `self.cached_log_data` zwischengespeicherten,
+        angereicherten Log-Einträge basierend auf `self.selected_gas`
+        und füllt die `DataTable`.
+        """
         if not self.log_widget: return
         
         try:
+            # --- KORREKTUR: Scroll-Position VOR dem Löschen prüfen ---
+            # Wir nutzen >= statt ==, um Rundungsfehler abzufangen.
+            is_at_bottom = self.log_widget.scroll_y >= self.log_widget.max_scroll_y
+            # ---
+            
             self.log_widget.clear()
             has_selection = bool(self.selected_gas)
     
@@ -283,7 +311,12 @@ class KNXLens(App):
             duration = time.time() - start_time
             logging.info(f"Log-Ansicht gefiltert. {found_count} Einträge in {duration:.4f}s gefunden.")
             self.log_widget.caption = f"{found_count} Einträge gefunden. ({duration:.2f}s) | {log_caption}"
-        
+
+            # --- KORREKTUR: Ggf. ans Ende scrollen ---
+            if is_at_bottom:
+                self.log_widget.scroll_end(animate=False, duration=0.0)
+            # ---
+
         except Exception as e:
             logging.error(f"Schwerer Fehler in _process_log_lines: {e}", exc_info=True)
             if self.log_widget:
@@ -292,11 +325,19 @@ class KNXLens(App):
 
 
     def _load_log_file_and_update_views(self):
-        """Liest die Log-Datei von der Festplatte, aktualisiert den Cache und alle Ansichten."""
+        """
+        Liest die Log-Datei (vollständig) von der Festplatte, 
+        setzt den Tailing-Status zurück und aktualisiert alle Ansichten.
+        """
         if not self.log_widget: return
         log_widget = self.log_widget
         
         log_file_path = self.config.get("log_file") or os.path.join(self.config.get("log_path", "."), "knx_bus.log")
+
+        # --- Tailing-Status zurücksetzen ---
+        self.last_log_mtime = None
+        self.last_log_position = 0
+        # ---
 
         if not os.path.exists(log_file_path):
             log_widget.clear()
@@ -304,27 +345,30 @@ class KNXLens(App):
             log_widget.add_row("[dim]Mit 'o' eine andere Datei öffnen.[/dim]")
             self.cached_log_data = []
             self.payload_history.clear()
+            self.action_toggle_log_reload(force_off=True) # Timer stoppen
             return
         
         start_time = time.time()
         logging.info(f"Lese Log-Datei von Festplatte: '{log_file_path}'")
         
         try:
+            is_zip = log_file_path.lower().endswith(".zip")
+            
             lines = []
-            if log_file_path.lower().endswith(".zip"):
+            if is_zip:
                 with zipfile.ZipFile(log_file_path, 'r') as zf:
                     log_files_in_zip = [name for name in zf.namelist() if name.lower().endswith('.log')]
                     if not log_files_in_zip:
-                        log_widget.clear()
-                        log_widget.add_row(f"\n[red]Keine .log-Datei im ZIP-Archiv gefunden.[/red]")
-                        self.cached_log_data = []
-                        self.payload_history.clear()
-                        return
+                        raise FileNotFoundError("Keine .log-Datei im ZIP-Archiv gefunden.")
                     with zf.open(log_files_in_zip[0]) as log_file:
                         lines = io.TextIOWrapper(log_file, encoding='utf-8').readlines()
             else:
                 with open(log_file_path, 'r', encoding='utf-8') as f:
                     lines = f.readlines()
+                    # --- NEU: Tailing-Status setzen ---
+                    self.last_log_position = f.tell() # Position am Dateiende
+                self.last_log_mtime = os.path.getmtime(log_file_path)
+                # --- ENDE NEU ---
             
             logging.debug("Starte parse_and_cache_log_data...")
             self.payload_history, self.cached_log_data = parse_and_cache_log_data(
@@ -337,17 +381,20 @@ class KNXLens(App):
             
             logging.debug("Aktualisiere Baum-Labels...")
             for tree in self.query(Tree):
-                # --- KORREKTUR: Datei-Browser überspringen ---
-                # Der Dateibaum hat keine KNX-Daten, daher ignorieren wir ihn hier.
-                if tree.id == "file_browser": 
-                    continue
-                # --- ENDE KORREKTUR ---
+                if tree.id == "file_browser": continue
                 self._update_tree_labels_recursively(tree.root)
             logging.debug("Baum-Labels aktualisiert.")
             
             logging.debug("Starte _process_log_lines...")
             self._process_log_lines()
             logging.debug("Beende _process_log_lines.")
+
+            # --- NEU: Auto-Reload je nach Dateityp ---
+            if is_zip:
+                self.action_toggle_log_reload(force_off=True)
+            else:
+                self.action_toggle_log_reload(force_on=True)
+            # --- ENDE NEU ---
 
             # Footer-Fix: Fokus verzögert setzen
             def set_focus_final():
@@ -368,7 +415,7 @@ class KNXLens(App):
             logging.error(f"Fehler beim Verarbeiten von '{log_file_path}': {e}", exc_info=True)
             self.cached_log_data = []
             self.payload_history.clear()
-
+            
     def _refilter_log_view(self) -> None:
         if not self.log_widget: return
         logging.info("Log-Ansicht wird mit gecachten Daten neu gefiltert (synchron).")
@@ -376,7 +423,7 @@ class KNXLens(App):
 
     def _get_descendant_gas(self, node: TreeNode) -> Set[str]:
         gas = set()
-        if node.data and "gas" in node.data:
+        if isinstance(node.data, dict) and "gas" in node.data:
             gas.update(node.data["gas"])
         for child in node.children:
             gas.update(self._get_descendant_gas(child))
@@ -384,12 +431,8 @@ class KNXLens(App):
 
     def _update_tree_labels_recursively(self, node: TreeNode) -> None:
         display_label = ""
-        
-        # --- KORREKTUR: Typsichere Prüfung ---
-        # Wir stellen sicher, dass node.data ein Dictionary ist, bevor wir "in" benutzen.
-        # Das verhindert Abstürze bei DirEntry-Objekten (Datei-Browser).
+        # Sicherstellen, dass es Daten gibt und kein Dateibaum-Objekt ist
         if isinstance(node.data, dict) and "original_name" in node.data:
-        # --- ENDE KORREKTUR ---
             original_name = node.data["original_name"]
             display_label = original_name
             
@@ -413,10 +456,9 @@ class KNXLens(App):
                     
                     display_label = f"{original_name} -> {payload_str}"
         else:
-            # Fallback für Knoten ohne unsere Daten (oder Datei-Knoten)
+            # Fallback für Knoten ohne Daten
             display_label = re.sub(r"^(\[[ *\-]] )+", "", str(node.label))
 
-        # Standard ist "[ ] ", damit die Einrückung stimmt, auch wenn keine GAs da sind.
         prefix = "[ ] "
         
         all_descendant_gas = self._get_descendant_gas(node)
@@ -439,7 +481,7 @@ class KNXLens(App):
     def action_toggle_selection(self) -> None:
         try:
             active_tree = self.query_one(TabbedContent).active_pane.query_one(Tree)
-            # Verhindere Crash im Dateibaum (hier gibt es nichts zu selektieren)
+            # Verhindere Crash im Dateibaum
             if active_tree.id == "file_browser": return
 
             node = active_tree.cursor_node
@@ -456,9 +498,7 @@ class KNXLens(App):
                 self.selected_gas.update(descendant_gas)
             
             for tree in self.query(Tree):
-                # --- KORREKTUR: Dateibaum überspringen ---
                 if tree.id == "file_browser": continue
-                # --- ENDE KORREKTUR ---
                 self._update_tree_labels_recursively(tree.root)
             
             if self.query_one(TabbedContent).active == "log_pane":
@@ -475,10 +515,10 @@ class KNXLens(App):
         try:
             active_tree = self.query_one(TabbedContent).active_pane.query_one(Tree)
             node = active_tree.cursor_node
-            if node and node.data and "original_name" in node.data:
+            if node and isinstance(node.data, dict) and "original_name" in node.data:
                 self.notify(f"Kopiert: '{node.data['original_name']}'")
             elif node:
-                label_text = node.label.plain
+                label_text = str(node.label)
                 clean_label = re.sub(r"^(\[[ *\-]] )+", "", label_text)
                 clean_label = re.sub(r"\s*->\s*.*$", "", clean_label)
                 self.notify(f"Kopiert: '{clean_label}'")
@@ -486,9 +526,8 @@ class KNXLens(App):
             self.notify("Konnte nichts kopieren.", severity="error")
 
     def action_open_log_file(self) -> None:
-        """Wechselt zum 'Dateien'-Tab (ersetzt den Dialog)."""
+        """Wechselt zum 'Dateien'-Tab."""
         self.query_one(TabbedContent).active = "files_pane"
-        # Optional: Fokus auf den Baum setzen
         try:
             self.query_one("#file_browser").focus()
         except:
@@ -498,17 +537,146 @@ class KNXLens(App):
         logging.info("Log-Datei wird manuell von Festplatte neu geladen.")
         self._load_log_file_and_update_views()
     
-    def action_toggle_log_reload(self) -> None:
+    def action_toggle_log_reload(self, force_on: bool = False, force_off: bool = False) -> None:
+        """Schaltet den Auto-Reload-Timer um (oder erzwingt ihn)."""
+        
+        # Fall 1: Stoppen erzwingen (z.B. bei ZIP-Datei oder Fehler)
+        if force_off:
+            if self.log_reload_timer:
+                self.log_reload_timer.stop()
+                self.log_reload_timer = None
+                self.notify("Log Auto-Reload [bold red]AUS[/] (Archiv/Fehler).", title="Log Ansicht")
+                logging.info("Auto-Reload gestoppt (force_off).")
+            return
+
+        # Fall 2: Starten erzwingen (z.B. nach Laden von .log-Datei)
+        if force_on:
+            if not self.log_reload_timer:
+                self.log_reload_timer = self.set_interval(1, self._efficient_log_tail)
+                self.notify("Log Auto-Reload [bold green]EIN[/] (Standard).", title="Log Ansicht")
+                logging.info("Auto-Reload (effizient) für .log-Datei gestartet.")
+            return
+
+        # Fall 3: Manueller Toggle durch Benutzer
         if self.log_reload_timer:
             self.log_reload_timer.stop()
             self.log_reload_timer = None
             self.notify("Log Auto-Reload [bold red]AUS[/].", title="Log Ansicht")
-            logging.info("Auto-Reload für Log-Datei deaktiviert.")
+            logging.info("Auto-Reload manuell deaktiviert.")
         else:
-            self.log_reload_timer = self.set_interval(1, self._load_log_file_and_update_views)
-            self.notify("Log Auto-Reload [bold green]EIN[/].", title="Log Ansicht")
-            logging.info("Auto-Reload für Log-Datei im 1-Sekunden-Intervall aktiviert.")
+            log_file_path = self.config.get("log_file")
+            if log_file_path and log_file_path.lower().endswith((".log", ".txt")):
+                self.log_reload_timer = self.set_interval(1, self._efficient_log_tail)
+                self.notify("Log Auto-Reload [bold green]EIN[/].", title="Log Ansicht")
+                logging.info("Auto-Reload (effizient) manuell aktiviert.")
+            else:
+                self.notify("Auto-Reload nur für .log/.txt-Dateien verfügbar.", severity="warning")
 
+
+    def _efficient_log_tail(self) -> None:
+        """
+        Prüft effizient auf Log-Änderungen ('tail -f'-Logik) 
+        und parst nur neue Zeilen.
+        """
+        log_file_path = self.config.get("log_file")
+        
+        if not log_file_path or not log_file_path.lower().endswith((".log", ".txt")):
+            self.action_toggle_log_reload(force_off=True)
+            return
+
+        try:
+            current_mtime = os.path.getmtime(log_file_path)
+            if current_mtime == self.last_log_mtime:
+                return 
+            
+            logging.debug(f"Log-Änderung erkannt (mtime {current_mtime}), lese ab Position {self.last_log_position}.")
+            self.last_log_mtime = current_mtime
+
+            with open(log_file_path, 'r', encoding='utf-8') as f:
+                f.seek(self.last_log_position)
+                new_lines = f.readlines()
+                self.last_log_position = f.tell()
+            
+            if not new_lines:
+                logging.debug("Log-Änderung war ein 'touch', keine neuen Zeilen.")
+                return
+            
+            # 1. Nur neue Zeilen parsen und zurückgeben lassen
+            new_cached_items = append_new_log_lines(
+                new_lines, 
+                self.project_data,
+                self.payload_history,
+                self.cached_log_data,
+                self.time_filter_start,
+                self.time_filter_end
+            )
+            
+            if not new_cached_items:
+                logging.debug("Keine neuen Zeilen nach Filterung (z.B. Zeitfilter).")
+                return
+
+            logging.debug(f"{len(new_cached_items)} neue Zeilen verarbeitet. Aktualisiere Tabelle...")
+
+            # 2. UI effizient aktualisieren
+            has_selection = bool(self.selected_gas)
+            rows_to_add = []
+
+            if has_selection:
+                # 2a. FILTER AKTIV: Wir filtern NUR die NEUEN Zeilen (das ist der 'grep')
+                logging.debug(f"Filter aktiv: 'Greppe' {len(new_cached_items)} neue Zeilen...")
+                for item in new_cached_items:
+                    if item["ga"] in self.selected_gas:
+                        rows_to_add.append((
+                            item["timestamp"], item["pa"], item["pa_name"],
+                            item["ga"], item["ga_name"], item["payload"]
+                        ))
+                logging.debug(f"{len(rows_to_add)} neue Zeilen passen zum Filter.")
+            
+            else:
+                # 2b. KEIN FILTER AKTIV: Alle neuen Zeilen hinzufügen
+                logging.debug(f"Kein Filter aktiv: Füge {len(new_cached_items)} neue Zeilen hinzu.")
+                for item in new_cached_items:
+                    rows_to_add.append((
+                        item["timestamp"], item["pa"], item["pa_name"],
+                        item["ga"], item["ga_name"], item["payload"]
+                    ))
+            
+            if not rows_to_add:
+                return # Nichts zu zeichnen
+
+            # --- KORREKTUR: Scroll-Position VOR dem Hinzufügen prüfen ---
+            is_at_bottom = self.log_widget.scroll_y >= self.log_widget.max_scroll_y
+            # ---
+
+            # 3. Nur die neuen, gefilterten Zeilen ANHÄNGEN
+            self.log_widget.add_rows(rows_to_add)
+            
+            # 4. Limit einhalten (nur wenn kein Filter aktiv ist)
+            if not has_selection:
+                current_rows = self.log_widget.row_count
+                if current_rows > MAX_LOG_LINES_NO_FILTER:
+                    num_to_remove = current_rows - MAX_LOG_LINES_NO_FILTER
+                    logging.debug(f"Entferne {num_to_remove} alte Zeilen von oben.")
+                    # Korrigierter Befehl (Plural)
+                    self.log_widget.remove_rows(0, num_to_remove) 
+
+            # --- KORREKTUR: Ggf. ans Ende scrollen ---
+            if is_at_bottom:
+                self.log_widget.scroll_end(animate=False, duration=0.0)
+            # ---
+
+            # 5. UI-Bäume (Payloads) aktualisieren
+            for tree in self.query(Tree):
+                if tree.id == "file_browser": continue
+                self._update_tree_labels_recursively(tree.root)
+            
+        except FileNotFoundError:
+            self.notify(f"Log-Datei '{log_file_path}' nicht mehr gefunden.", severity="error")
+            self.action_toggle_log_reload(force_off=True)
+        except Exception as e:
+            logging.error(f"Fehler im efficient_log_tail: {e}", exc_info=True)
+            self.notify(f"Fehler beim Log-Reload: {e}", severity="error")
+            self.action_toggle_log_reload(force_off=True)
     def action_time_filter(self) -> None:
         def parse_time_input(time_str: str) -> Optional[datetime_time]:
             if not time_str:
