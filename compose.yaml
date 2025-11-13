@@ -1,6 +1,6 @@
 services:
   logger:
-    image: henfri/knx-lens
+    image: henfri/knx-lens:latest
     container_name: knx_logger
     command:
       - python
@@ -14,7 +14,7 @@ services:
       - .env
     restart: unless-stopped
   web:
-    image: henfri/knx-lens
+    image: henfri/knx-lens:latest
     container_name: knx_web
     command:
       - python
