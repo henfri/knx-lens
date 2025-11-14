@@ -105,10 +105,10 @@ class KNXLens(App):
         except Exception:
             logging.critical("Konnte UI-Fehler nicht anzeigen.", exc_info=True)
 
-    # --- SYNCHRONER START ---
+    # --- GEÄNDERTER SYNCHRONER START (MIT CALL_LATER) ---
     def on_mount(self) -> None:
-        """Lädt ALLES (Projekt UND Logs) synchron, bevor die UI angezeigt wird."""
-        logging.debug("on_mount: Starte synchrones Laden...")
+        """Lädt Projekt + baut UI (schnell), DANN lädt Logs (langsam)."""
+        logging.debug("on_mount: Starte 'UI-First'-Laden...")
         start_time = time.time()
         
         try:
@@ -123,25 +123,50 @@ class KNXLens(App):
             self.pa_tree_data = build_pa_tree_data(self.project_data)
             self.building_tree_data = build_building_tree_data(self.project_data)
             logging.debug(f"Baum-Daten gebaut in {time.time() - tree_data_start:.4f}s")
+
+            # 3. UI Bauen (schnell)
+            ui_build_start = time.time()
+            self.build_ui_tabs()
+            logging.debug(f"UI-Tabs gebaut in {time.time() - ui_build_start:.4f}s")
             
-            # 3. Logs laden (langsam, 3-6s)
+            # 4. UI freigeben (Lade-Balken weg)
+            self.query_one("#loading_container").remove()
+            tabs = self.query_one(TabbedContent)
+            tabs.disabled = False
+            tabs.focus()
+            logging.info(f"UI-Start (Phase 1) abgeschlossen in {time.time() - start_time:.4f}s. App ist bedienbar.")
+
+            # 5. Langsames Laden (Logs, UI-Updates) verzögert starten
+            #    Dies stellt sicher, dass die UI (Bäume) vollständig gemountet ist, bevor wir sie füllen.
+            self.notify("Projekt geladen. Lade Logs im Hintergrund...")
+            self.call_later(self.load_logs_and_finish_ui)
+            
+        except Exception as e:
+            self.show_startup_error(e, traceback.format_exc())
+    
+    def load_logs_and_finish_ui(self) -> None:
+        """
+        [SYNCHRON, nach UI-Start]
+        Friert die UI ein, um Logs zu laden und UI-Labels/Tabelle zu füllen.
+        Wird von on_mount() via call_later() aufgerufen.
+        """
+        logging.debug("load_logs_and_finish_ui: Starte Phase 2 (Log-Laden)...")
+        start_time = time.time()
+        
+        try:
+            # 1. Logs laden (langsam, 3-6s)
             log_load_start = time.time()
             self._load_log_file_data_only()
             logging.debug(f"Log-Daten geladen in {time.time() - log_load_start:.4f}s")
 
-            # 4. UI Bauen (schnell)
-            ui_build_start = time.time()
-            self.build_ui_tabs()
-            logging.debug(f"UI-Tabs gebaut in {time.time() - ui_build_start:.4f}s")
-
-            # 5. Bäume popolieren (schnell)
+            # 2. Bäume popolieren (jetzt sicher)
             populate_start = time.time()
             self._populate_tree_from_data(self.query_one("#building_tree", Tree), self.building_tree_data)
             self._populate_tree_from_data(self.query_one("#pa_tree", Tree), self.pa_tree_data)
             self._populate_tree_from_data(self.query_one("#ga_tree", Tree), self.ga_tree_data) 
             logging.debug(f"Bäume popoliert in {time.time() - populate_start:.4f}s")
-            
-            # 6. Baum-Labels aktualisieren (langsam, 1-2s)
+
+            # 3. Baum-Labels aktualisieren (langsam, 1-2s)
             labels_start = time.time()
             logging.debug("Aktualisiere Baum-Labels...")
             for tree in self.query(Tree):
@@ -149,7 +174,7 @@ class KNXLens(App):
                 self._update_tree_labels_recursively(tree.root)
             logging.debug(f"Baum-Labels aktualisiert in {time.time() - labels_start:.4f}s")
 
-            # 7. Initiale Log-Ansicht rendern (langsam, 0.5s)
+            # 4. Initiale Log-Ansicht rendern (langsam, 0.5s)
             render_start = time.time()
             logging.debug("Starte _process_log_lines (initiale Log-Ansicht)...")
             self.log_view_is_dirty = True
@@ -157,21 +182,16 @@ class KNXLens(App):
             self.log_view_is_dirty = False 
             logging.debug(f"_process_log_lines beendet in {time.time() - render_start:.4f}s")
 
-            # 8. Auto-Reload starten
+            # 5. Auto-Reload starten
             if not (self.config.get("log_file") or "").lower().endswith(".zip"):
                  self.action_toggle_log_reload(force_on=True)
+            
+            logging.info(f"Phase 2 (Log-Laden & UI-Finish) abgeschlossen in {time.time() - start_time:.4f}s")
 
-            # 9. UI freigeben
-            self.query_one("#loading_container").remove()
-            tabs = self.query_one(TabbedContent)
-            tabs.disabled = False
-            tabs.focus()
-            
-            logging.info(f"Synchroner Start abgeschlossen in {time.time() - start_time:.4f}s")
-            
         except Exception as e:
-            self.show_startup_error(e, traceback.format_exc())
-    
+            logging.error(f"Fehler in Phase 2 (load_logs_and_finish_ui): {e}", exc_info=True)
+            self.notify(f"Fehler beim Laden der Log-Datei: {e}", severity="error")
+
     def build_ui_tabs(self) -> None:
         """
         [SYNCHRON]
@@ -225,7 +245,7 @@ class KNXLens(App):
         tabs.add_pane(TabPane("Log-Ansicht", log_view_container, id="log_pane"))
         tabs.add_pane(TabPane("Dateien", file_browser_container, id="files_pane"))
         logging.debug("build_ui_tabs: UI-Tabs erstellt.")
-    # --- ENDE SYNCHRONER START ---
+    # --- ENDE START-LOGIK ---
 
     def _reset_user_activity(self) -> None:
         """Setzt den Timer für Inaktivität zurück und startet ggf. den Reload-Timer neu."""
