@@ -80,6 +80,11 @@ class KNXLens(App):
         self.time_filter_start: Optional[datetime_time] = None
         self.time_filter_end: Optional[datetime_time] = None
 
+        # --- NEU: Regex-Filter Status ---
+        self.regex_filter: Optional[re.Pattern] = None
+        self.regex_filter_string: str = ""
+        # --- ENDE NEU ---
+
         # --- NEU: Für effizientes Tailing ---
         self.last_log_mtime: Optional[float] = None
         self.last_log_position: int = 0
@@ -128,6 +133,17 @@ class KNXLens(App):
             self.log_widget = DataTable(id="log_view")
             self.log_widget.cursor_type = "row"
 
+            # --- NEU: Container für Log-Ansicht mit Regex-Input ---
+            log_view_container = Vertical(
+                Input(
+                    placeholder="Regex-Filter (z.B. 'fehler|warnung' oder '1.1.25') und Enter...", 
+                    id="regex_filter_input"
+                ),
+                self.log_widget,
+                id="log_view_container"
+            )
+            # --- ENDE NEU ---
+
             # --- NEU: Datei-Browser mit Pfad-Eingabe ---
             file_browser_container = Vertical(
                 Input(placeholder="Pfad eingeben (z.B. C:/ oder //Server/Share) und Enter drücken...", id="path_changer"),
@@ -156,7 +172,9 @@ class KNXLens(App):
             tabs.add_pane(TabPane("Gebäudestruktur", building_tree, id="building_pane"))
             tabs.add_pane(TabPane("Physikalische Adressen", pa_tree, id="pa_pane"))
             tabs.add_pane(TabPane("Gruppenadressen", ga_tree, id="ga_pane"))
-            tabs.add_pane(TabPane("Log-Ansicht", self.log_widget, id="log_pane"))
+            
+            # --- GEÄNDERT: Den Container statt nur das Widget hinzufügen ---
+            tabs.add_pane(TabPane("Log-Ansicht", log_view_container, id="log_pane"))
             
             tabs.add_pane(TabPane("Dateien", file_browser_container, id="files_pane"))
 
@@ -181,7 +199,9 @@ class KNXLens(App):
             self.show_startup_error(e, traceback.format_exc())
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
-        """Wechselt das Verzeichnis des Datei-Browsers."""
+        """Wechselt das Verzeichnis des Datei-Browsers ODER setzt den Regex-Filter."""
+        
+        # Handler für Datei-Browser
         if event.input.id == "path_changer":
             # 1. Anführungszeichen entfernen
             raw_input = event.value.strip().strip('"').strip("'")
@@ -212,6 +232,29 @@ class KNXLens(App):
                         self.notify(f"Verzeichnis nicht gefunden: {target_path}", severity="error")
             except Exception as e:
                 self.notify(f"Pfad-Fehler: {e}", severity="error")
+
+        # --- NEU: Handler für Regex-Filter ---
+        elif event.input.id == "regex_filter_input":
+            filter_text = event.value
+            
+            if not filter_text:
+                self.regex_filter = None
+                self.regex_filter_string = ""
+                self.notify("Regex-Filter entfernt.")
+            else:
+                try:
+                    # Case-insensitive
+                    self.regex_filter = re.compile(filter_text, re.IGNORECASE)
+                    self.regex_filter_string = filter_text
+                    self.notify(f"Regex-Filter aktiv: '{filter_text}'")
+                except re.error as e:
+                    self.regex_filter = None
+                    self.regex_filter_string = ""
+                    self.notify(f"Ungültiger Regex: {e}", severity="error")
+            
+            # Filter-Ansicht neu aufbauen
+            self._refilter_log_view()
+        # --- ENDE NEU ---
     
     def on_directory_tree_file_selected(self, event: DirectoryTree.FileSelected) -> None:
         """Wird aufgerufen, wenn im Dateien-Tab eine Datei ausgewählt wird."""
@@ -267,6 +310,10 @@ class KNXLens(App):
             
             self.log_widget.clear()
             has_selection = bool(self.selected_gas)
+            
+            # --- NEU: Regex-Status abrufen ---
+            has_regex_filter = bool(self.regex_filter)
+            # --- ENDE NEU ---
     
             if not self.cached_log_data:
                  self.log_widget.add_row("[yellow]Keine Log-Daten geladen oder Log-Datei ist leer.[/yellow]")
@@ -282,7 +329,14 @@ class KNXLens(App):
                 filter_info = f"Filtere Log für {len(sorted_gas)} GAs: {', '.join(sorted_gas)}"
                 logging.info(f"Applizieren des Log-Ansicht-Filters für {len(sorted_gas)} GAs.")
                 log_caption = f"Filter aktiv ({len(sorted_gas)} GAs)"
-            else:
+            
+            # --- NEU: Regex-Caption hinzufügen ---
+            if has_regex_filter:
+                log_caption += f" | Regex aktiv ('{self.regex_filter_string}')"
+            # --- ENDE NEU ---
+
+            # --- GEÄNDERT: Caption-Logik ---
+            if not has_selection and not has_regex_filter:
                 logging.info("Keine Auswahl. Zeige alle Log-Einträge.")
                 if len(self.cached_log_data) > MAX_LOG_LINES_NO_FILTER:
                     log_entries_to_process = self.cached_log_data[-MAX_LOG_LINES_NO_FILTER:]
@@ -290,12 +344,33 @@ class KNXLens(App):
                     logging.warning(f"Kein Filter aktiv. Zeige nur die letzten {MAX_LOG_LINES_NO_FILTER} von {len(self.cached_log_data)} Log-Einträgen.")
                 else:
                     log_caption = f"Alle Einträge ({len(self.cached_log_data)})"
+            # --- ENDE ÄNDERUNG ---
 
             found_count = 0
             rows_to_add = []
+            
+            # --- GEÄNDERT: Filter-Schleife (GA UND Regex) ---
             for i, log_entry in enumerate(log_entries_to_process):
+                
+                # 1. GA-Filter (wie bisher)
                 if has_selection and log_entry["ga"] not in self.selected_gas:
                     continue 
+                
+                # 2. NEU: Regex-Filter
+                if has_regex_filter:
+                    # Baue einen durchsuchbaren String aus allen Feldern
+                    search_string = (
+                        f"{log_entry['timestamp']} "
+                        f"{log_entry['pa']} "
+                        f"{log_entry['pa_name']} "
+                        f"{log_entry['ga']} "
+                        f"{log_entry['ga_name']} "
+                        f"{log_entry['payload']}"
+                    )
+                    if not self.regex_filter.search(search_string):
+                        continue # Trifft nicht zu -> nächste Zeile
+
+                # 3. Hinzufügen (wenn beide Filter passiert wurden)
                 rows_to_add.append((
                     log_entry["timestamp"],
                     log_entry["pa"],
@@ -305,6 +380,7 @@ class KNXLens(App):
                     log_entry["payload"]
                 ))
                 found_count += 1
+            # --- ENDE ÄNDERUNG ---
             
             self.log_widget.add_rows(rows_to_add)
             
@@ -619,27 +695,43 @@ class KNXLens(App):
 
             # 2. UI effizient aktualisieren
             has_selection = bool(self.selected_gas)
+            
+            # --- NEU: Regex-Status abrufen ---
+            has_regex_filter = bool(self.regex_filter)
+            # --- ENDE NEU ---
+            
             rows_to_add = []
 
-            if has_selection:
-                # 2a. FILTER AKTIV: Wir filtern NUR die NEUEN Zeilen (das ist der 'grep')
-                logging.debug(f"Filter aktiv: 'Greppe' {len(new_cached_items)} neue Zeilen...")
-                for item in new_cached_items:
-                    if item["ga"] in self.selected_gas:
-                        rows_to_add.append((
-                            item["timestamp"], item["pa"], item["pa_name"],
-                            item["ga"], item["ga_name"], item["payload"]
-                        ))
-                logging.debug(f"{len(rows_to_add)} neue Zeilen passen zum Filter.")
+            # --- GEÄNDERT: Diese Schleife wendet jetzt BEIDE Filter an ---
+            logging.debug(f"Filtere {len(new_cached_items)} neue Zeilen (GA: {has_selection}, Regex: {has_regex_filter})...")
             
-            else:
-                # 2b. KEIN FILTER AKTIV: Alle neuen Zeilen hinzufügen
-                logging.debug(f"Kein Filter aktiv: Füge {len(new_cached_items)} neue Zeilen hinzu.")
-                for item in new_cached_items:
-                    rows_to_add.append((
-                        item["timestamp"], item["pa"], item["pa_name"],
-                        item["ga"], item["ga_name"], item["payload"]
-                    ))
+            for item in new_cached_items:
+                
+                # 1. GA-Filter
+                if has_selection and item["ga"] not in self.selected_gas:
+                    continue
+                
+                # 2. Regex-Filter
+                if has_regex_filter:
+                    search_string = (
+                        f"{item['timestamp']} "
+                        f"{item['pa']} "
+                        f"{item['pa_name']} "
+                        f"{item['ga']} "
+                        f"{item['ga_name']} "
+                        f"{item['payload']}"
+                    )
+                    if not self.regex_filter.search(search_string):
+                        continue
+
+                # 3. Hinzufügen
+                rows_to_add.append((
+                    item["timestamp"], item["pa"], item["pa_name"],
+                    item["ga"], item["ga_name"], item["payload"]
+                ))
+            
+            logging.debug(f"{len(rows_to_add)} neue Zeilen passen zu den Filtern.")
+            # --- ENDE ÄNDERUNG ---
             
             if not rows_to_add:
                 return # Nichts zu zeichnen
@@ -652,14 +744,13 @@ class KNXLens(App):
             self.log_widget.add_rows(rows_to_add)
             
             # 4. Limit einhalten (nur wenn kein Filter aktiv ist)
-            if not has_selection:
+            if not has_selection and not has_regex_filter:
                 current_rows = self.log_widget.row_count
                 if current_rows > MAX_LOG_LINES_NO_FILTER:
                     num_to_remove = current_rows - MAX_LOG_LINES_NO_FILTER
                     logging.debug(f"Entferne {num_to_remove} alte Zeilen von oben.")
-                    # Korrigierter Befehl (Plural)
-                    self.log_widget.remove_rows(0, num_to_remove) 
-
+                    self.log_widget.remove_row(0, num_to_remove) 
+ 
             # --- KORREKTUR: Ggf. ans Ende scrollen ---
             if is_at_bottom:
                 self.log_widget.scroll_end(animate=False, duration=0.0)
@@ -677,6 +768,7 @@ class KNXLens(App):
             logging.error(f"Fehler im efficient_log_tail: {e}", exc_info=True)
             self.notify(f"Fehler beim Log-Reload: {e}", severity="error")
             self.action_toggle_log_reload(force_off=True)
+            
     def action_time_filter(self) -> None:
         def parse_time_input(time_str: str) -> Optional[datetime_time]:
             if not time_str:
