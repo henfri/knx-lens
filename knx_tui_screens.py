@@ -41,16 +41,43 @@ class FilteredDirectoryTree(DirectoryTree):
 
 class FilterInputScreen(ModalScreen[str]):
     """Ein modaler Bildschirm für die Filtereingabe."""
+    
+    # --- KORREKTUR: __init__ hinzugefügt ---
+    def __init__(self, prompt: str = "Baum filtern (Enter zum Bestätigen, ESC zum Abbrechen):"):
+        """
+        Initialisiert den Screen mit einem benutzerdefinierten Prompt.
+        
+        Args:
+            prompt: Der Text, der über dem Eingabefeld angezeigt wird.
+        """
+        super().__init__()
+        self.prompt = prompt
+    # --- ENDE KORREKTUR ---
+
     def compose(self) -> ComposeResult:
         yield Center(Vertical(
-            Label("Baum filtern (Enter zum Bestätigen, ESC zum Abbrechen):"),
-            Input(placeholder="Filtertext...", id="filter_input"),
+            # --- KORREKTUR: Hardcodierter Text durch Variable ersetzt ---
+            Label(self.prompt),
+            Input(placeholder="Eingabe...", id="filter_input"),
             id="filter_dialog"
         ))
-    def on_mount(self) -> None: self.query_one("#filter_input", Input).focus()
-    def on_input_submitted(self, event: Input.Submitted) -> None: self.dismiss(event.value)
+        
+    def on_mount(self) -> None: 
+        self.query_one("#filter_input", Input).focus()
+        
+    def on_input_submitted(self, event: Input.Submitted) -> None: 
+        # Hack für "Ja/Nein"-Dialoge
+        if "ja/nein" in self.prompt.lower():
+            if event.value.lower() in ["ja", "j", "yes", "y"]:
+                self.dismiss("ja")
+            else:
+                self.dismiss("") # Alles andere ist "Nein"
+        else:
+            self.dismiss(event.value)
+            
     def on_key(self, event: events.Key) -> None:
-        if event.key == "escape": self.dismiss("")
+        if event.key == "escape": 
+            self.dismiss("")
 
 class TimeFilterScreen(ModalScreen[Tuple[Optional[str], Optional[str]]]):
     """Ein modaler Bildschirm für den Zeitfilter."""

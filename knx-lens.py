@@ -18,13 +18,21 @@ from datetime import datetime, time as datetime_time
 from pathlib import Path
 from typing import Dict, List, Any, Optional, Set, Tuple
 
+# --- NEUE ABHÄNGIGKEIT ---
+try:
+    import yaml
+except ImportError:
+    print("FEHLER: 'PyYAML' ist nicht installiert. Bitte installieren: pip install PyYAML", file=sys.stderr)
+    sys.exit(1)
+# ---
+
 # Third-party libraries
 from dotenv import load_dotenv, set_key, find_dotenv
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Vertical
-# WICHTIG: Input widget importieren
-from textual.widgets import Header, Footer, Tree, Static, TabbedContent, TabPane, DataTable, DirectoryTree, Input
+# --- ÄNDERUNG: Footer entfernt ---
+from textual.widgets import Header, Tree, Static, TabbedContent, TabPane, DataTable, DirectoryTree, Input
 from textual.widgets.tree import TreeNode
 from textual import events
 from textual.timer import Timer
@@ -36,32 +44,44 @@ from knx_project_utils import (
     build_pa_tree_data, 
     build_building_tree_data
 )
-# --- Import geändert ---
 from knx_log_utils import parse_and_cache_log_data, append_new_log_lines
-# Importiere Screens UND den neuen Tree
 from knx_tui_screens import FilterInputScreen, TimeFilterScreen, FilteredDirectoryTree
-# --- ENDE LOKALE IMPORTE ---
+
+# --- NEU: Import der Logik-Klasse ---
+from knx_tui_logic import KNXTuiLogic
+# ---
 
 
 ### --- SETUP & KONSTANTEN ---
 LOG_LEVEL = logging.INFO
 TreeData = Dict[str, Any]
-# MAX_LOG_LINES_NO_FILTER = 10000 # <-- Wird jetzt per ENV gesetzt
 
 ### --- TUI: HAUPTANWENDUNG ---
-class KNXLens(App):
+class KNXLens(App, KNXTuiLogic):
     CSS_PATH = "knx-lens.css"
+    
+    # --- FIX "KEINE FUNKTION": Alle Tasten müssen hier (mit show=True)
+    # definiert sein, damit Textual die Aktionen registriert.
+    # Unser manueller Footer in `update_footer` steuert die *Anzeige*.
     BINDINGS = [
-        Binding("q", "quit", "Beenden"),
-        Binding("a", "toggle_selection", "Auswahl"),
-        Binding("c", "copy_label", "Kopieren"),
-        Binding("f", "filter_tree", "Filtern"),
-        Binding("o", "open_log_file", "Dateien-Tab öffnen"),
-        Binding("r", "reload_log_file", "Log neu laden"),
-        Binding("t", "toggle_log_reload", "Auto-Reload Log"),
-        Binding("i", "time_filter", "Zeitfilter"),
-        Binding("escape", "reset_filter", "Auswahl zurücksetzen", show=True),
+        # Globale
+        Binding("q", "quit", "Quit", show=True, priority=True),
+        
+        # Projekt-Baum Tasten
+        Binding("a", "toggle_selection", "Auswahl", show=True),
+        Binding("s", "save_filter", "Speichern", show=True),
+        Binding("f", "filter_tree", "Filter", show=True),
+        Binding("escape", "reset_filter", "Reset Filter", show=True),
+        
+        # Filter-Baum Tasten
+        Binding("d", "delete_item", "Löschen", show=True),
+
+        # Log-Ansicht Tasten
+        Binding("r", "reload_log_file", "Reload", show=True),
+        Binding("t", "toggle_log_reload", "Auto-Reload", show=True),
+        Binding("i", "time_filter", "Interval", show=True),
     ]
+    # --- ENDE FIX ---
 
     def __init__(self, config: Dict):
         super().__init__()
@@ -70,41 +90,86 @@ class KNXLens(App):
         self.building_tree_data: TreeData = {}
         self.pa_tree_data: TreeData = {}
         self.ga_tree_data: TreeData = {}
-        self.selected_gas: Set[str] = set()
         
+        # ... (Filter-Status, etc. bleiben gleich) ...
+        self.selected_gas: Set[str] = set()
+        self.regex_filter: Optional[re.Pattern] = None
+        self.regex_filter_string: str = ""
+        self.named_filter_path: Path = Path(".") / "named_filters.yaml"
+        self.named_filters: Dict[str, List[str]] = {}
+        self.named_filters_rules: Dict[str, Dict[str, Any]] = {}
+        self.active_named_filters: Set[str] = set()
+        self.active_named_regex_rules: List[re.Pattern] = []
         self.log_widget: Optional[DataTable] = None
         self.log_reload_timer: Optional[Timer] = None
         self.payload_history: Dict[str, List[Dict[str, str]]] = {}
         self.cached_log_data: List[Dict[str, str]] = []
-        
         self.time_filter_start: Optional[datetime_time] = None
         self.time_filter_end: Optional[datetime_time] = None
-
-        self.regex_filter: Optional[re.Pattern] = None
-        self.regex_filter_string: str = ""
         self.last_user_activity: float = time.time()
         self.log_view_is_dirty: bool = True 
         self.last_log_mtime: Optional[float] = None
         self.last_log_position: int = 0
         self.paging_warning_shown: bool = False
+        self.max_log_lines = int(self.config.get('max_log_lines', 10000))
+        self.reload_interval = float(self.config.get('reload_interval', 5.0))
 
-        # --- NEU: Konfigurierbare Werte ---
-        try:
-            self.max_log_lines = int(self.config.get('max_log_lines', 10000))
-        except ValueError:
-            self.max_log_lines = 10000
-        try:
-            self.reload_interval = float(self.config.get('reload_interval', 5.0))
-        except ValueError:
-            self.reload_interval = 5.0
-        # --- ENDE NEU ---
+        # --- FIX "TRÄGHEIT":
+        # Set, das die Bäume enthält, die noch ein Payload-Update benötigen.
+        self.trees_need_payload_update = {"#pa_tree", "#ga_tree"}
+        # --- ENDE FIX ---
+        
+        self.tab_bindings_display = {
+            # --- FIX "DATEIEN ÜBERALL": "o" hier hinzugefügt ---
+            "building_pane": [
+                Binding("a", "toggle_selection", "Auswahl"),
+                Binding("s", "save_filter", "Speichern"),
+                Binding("f", "filter_tree", "Filter"),
+                Binding("escape", "reset_filter", "Reset"),
+                binding_o_dateien,
+            ],
+            "pa_pane": [
+                Binding("a", "toggle_selection", "Auswahl"),
+                Binding("s", "save_filter", "Speichern"),
+                Binding("f", "filter_tree", "Filter"),
+                Binding("escape", "reset_filter", "Reset"),
+                binding_o_dateien,
+            ],
+            "ga_pane": [
+                Binding("a", "toggle_selection", "Auswahl"),
+                Binding("s", "save_filter", "Speichern"),
+                Binding("f", "filter_tree", "Filter"),
+                Binding("escape", "reset_filter", "Reset"),
+                binding_o_dateien,
+            ],
+            "filter_pane": [
+                Binding("a", "toggle_selection", "Aktivieren"),
+                Binding("d", "delete_item", "Löschen"),
+                binding_o_dateien,
+            ],
+            "log_pane": [
+                Binding("r", "reload_log_file", "Reload"),
+                Binding("t", "toggle_log_reload", "Auto-Reload"),
+                Binding("i", "time_filter", "Interval"),
+                binding_o_dateien,
+            ],
+            # --- FIX "DATEIEN ÜBERALL": "o" hier entfernt ---
+            "files_pane": [] 
+        }
+        
+        # Globale Tasten, die *immer* angezeigt werden
+        self.global_bindings_display = [
+            Binding("q", "quit", "Quit"),
+            # --- FIX "DATEIEN ÜBERALL": "o" hier entfernt ---
+        ]
 
 
     def compose(self) -> ComposeResult:
         yield Header(name="KNX Projekt-Explorer")
         yield Vertical(Static("Lade und verarbeite Projektdatei...", id="loading_label"), id="loading_container")
         yield TabbedContent(id="main_tabs", disabled=True)
-        yield Footer()
+        # --- KORREKTUR: Footer durch Static ersetzt ---
+        yield Static("", id="manual_footer")
 
     def show_startup_error(self, exc: Exception, tb_str: str) -> None:
         try:
@@ -113,51 +178,85 @@ class KNXLens(App):
         except Exception:
             logging.critical("Konnte UI-Fehler nicht anzeigen.", exc_info=True)
 
-    # --- SYNCHRONER START ---
     def on_mount(self) -> None:
-        """Lädt ALLES (Projekt UND Logs) synchron, bevor die UI angezeigt wird."""
-        logging.debug("on_mount: Starte synchrones Laden...")
+        # (Bleibt fast gleich)
+        logging.debug("on_mount: Starte 'UI-First'-Laden...")
         start_time = time.time()
         
         try:
-            # 1. Projekt laden (schnell, 0.2s)
+            # 1. Projekt laden
             proj_start = time.time()
             self.project_data = load_or_parse_project(self.config['knxproj_path'], self.config['password'])
             logging.debug(f"Projekt geladen in {time.time() - proj_start:.4f}s")
-
-            # 2. Baum-Daten bauen (schnell)
+            
+            knxproj_dir = Path(self.config['knxproj_path']).parent
+            self.named_filter_path = knxproj_dir / "named_filters.yaml"
+            logging.info(f"Named-Filter-Pfad: {self.named_filter_path}")
+            
+            # 2. Baum-Daten bauen
             tree_data_start = time.time()
             self.ga_tree_data = build_ga_tree_data(self.project_data)
             self.pa_tree_data = build_pa_tree_data(self.project_data)
             self.building_tree_data = build_building_tree_data(self.project_data)
             logging.debug(f"Baum-Daten gebaut in {time.time() - tree_data_start:.4f}s")
+
+            # 3. UI Bauen
+            ui_build_start = time.time()
+            self.build_ui_tabs()
+            logging.debug(f"UI-Tabs gebaut in {time.time() - ui_build_start:.4f}s")
             
-            # 3. Logs laden (langsam, 3-6s)
+            # 4. UI freigeben
+            self.query_one("#loading_container").remove()
+            tabs = self.query_one(TabbedContent)
+            tabs.disabled = False
+            tabs.focus()
+            logging.info(f"UI-Start (Phase 1) abgeschlossen in {time.time() - start_time:.4f}s. App ist bedienbar.")
+
+            # 5. Langsames Laden
+            self.notify("Projekt geladen. Lade Logs im Hintergrund...")
+            self.call_later(self.load_data_phase_2)
+            
+            # Initialen Footer setzen
+            self.update_footer("building_pane")
+            
+        except Exception as e:
+            self.show_startup_error(e, traceback.format_exc())
+    
+    def load_data_phase_2(self) -> None:
+        logging.debug("load_data_phase_2: Starte Phase 2 (Log-Laden)...")
+        start_time = time.time()
+        
+        try:
+            # 1. Named Filters laden
+            filter_load_start = time.time()
+            self._load_named_filters()
+            logging.debug(f"Named Filters geladen in {time.time() - filter_load_start:.4f}s")
+
+            # 2. Logs laden
             log_load_start = time.time()
             self._load_log_file_data_only()
             logging.debug(f"Log-Daten geladen in {time.time() - log_load_start:.4f}s")
 
-            # 4. UI Bauen (schnell)
-            ui_build_start = time.time()
-            self.build_ui_tabs()
-            logging.debug(f"UI-Tabs gebaut in {time.time() - ui_build_start:.4f}s")
-
-            # 5. Bäume popolieren (schnell)
+            # 3. Bäume popolieren
             populate_start = time.time()
             self._populate_tree_from_data(self.query_one("#building_tree", Tree), self.building_tree_data)
             self._populate_tree_from_data(self.query_one("#pa_tree", Tree), self.pa_tree_data)
-            self._populate_tree_from_data(self.query_one("#ga_tree", Tree), self.ga_tree_data) 
+            self._populate_tree_from_data(self.query_one("#ga_tree", Tree), self.ga_tree_data)
+            self._populate_named_filter_tree()
             logging.debug(f"Bäume popoliert in {time.time() - populate_start:.4f}s")
-            
-            # 6. Baum-Labels aktualisieren (langsam, 1-2s)
+
+            # 4. Baum-Labels aktualisieren
             labels_start = time.time()
             logging.debug("Aktualisiere Baum-Labels...")
-            for tree in self.query(Tree):
-                if tree.id == "file_browser": continue
-                self._update_tree_labels_recursively(tree.root)
-            logging.debug(f"Baum-Labels aktualisiert in {time.time() - labels_start:.4f}s")
+            
+            # --- FIX "TRÄGHEIT": Nur den ersten Baum beim Start aktualisieren ---
+            logging.debug("Aktualisiere Labels für #building_tree (initial)...")
+            self._update_tree_labels_recursively(self.query_one("#building_tree", Tree).root)
+            logging.debug(f"Baum-Labels für #building_tree aktualisiert in {time.time() - labels_start:.4f}s")
+            # Die anderen Bäume (#pa_tree, #ga_tree) werden in on_tabbed_content_tab_activated geladen
+            # --- ENDE FIX ---
 
-            # 7. Initiale Log-Ansicht rendern (langsam, 0.5s)
+            # 5. Initiale Log-Ansicht rendern
             render_start = time.time()
             logging.debug("Starte _process_log_lines (initiale Log-Ansicht)...")
             self.log_view_is_dirty = True
@@ -165,50 +264,45 @@ class KNXLens(App):
             self.log_view_is_dirty = False 
             logging.debug(f"_process_log_lines beendet in {time.time() - render_start:.4f}s")
 
-            # 8. Auto-Reload starten
+            # 6. Auto-Reload starten
             if not (self.config.get("log_file") or "").lower().endswith(".zip"):
                  self.action_toggle_log_reload(force_on=True)
+            
+            # 7. Fokus auf ersten Tab setzen (löst on_tabbed_content_tab_activated aus)
+            self.query_one(TabbedContent).active = "building_pane"
+            
+            logging.info(f"Phase 2 (Log-Laden & UI-Finish) abgeschlossen in {time.time() - start_time:.4f}s")
 
-            # 9. UI freigeben
-            self.query_one("#loading_container").remove()
-            tabs = self.query_one(TabbedContent)
-            tabs.disabled = False
-            tabs.focus()
-            
-            logging.info(f"Synchroner Start abgeschlossen in {time.time() - start_time:.4f}s")
-            
         except Exception as e:
-            self.show_startup_error(e, traceback.format_exc())
-    
+            logging.error(f"Fehler in Phase 2 (load_data_phase_2): {e}", exc_info=True)
+            self.notify(f"Fehler beim Laden der Log-Datei: {e}", severity="error")
+
     def build_ui_tabs(self) -> None:
-        """
-        [SYNCHRON]
-        Baut die TUI-Tabs und -Bäume (ohne Daten).
-        """
+        # (Bleibt gleich wie im Vordurchgang)
         logging.debug("build_ui_tabs: Beginne mit UI-Aufbau.")
         tabs = self.query_one(TabbedContent)
         
         building_tree = Tree("Gebäude", id="building_tree")
         pa_tree = Tree("Linien", id="pa_tree")
         ga_tree = Tree("Funktionen", id="ga_tree")
+        filter_tree = Tree("Filter-Gruppen", id="named_filter_tree")
+        named_filter_container = Vertical(filter_tree, id="named_filter_container")
         
         self.log_widget = DataTable(id="log_view")
         self.log_widget.cursor_type = "row"
-
-        log_view_container = Vertical(
-            Input(
-                placeholder="Regex-Filter (z.B. 'fehler|warnung' oder '1.1.25') und Enter...", 
-                id="regex_filter_input"
-            ),
-            self.log_widget,
-            id="log_view_container"
+        
+        log_filter_input = Input(
+            placeholder="Globaler AND-Regex-Filter (z.B. 'fehler|warnung')...", 
+            id="regex_filter_input"
         )
-
-        file_browser_container = Vertical(
-            Input(placeholder="Pfad eingeben (z.B. C:/ oder //Server/Share) und Enter drücken...", id="path_changer"),
-            FilteredDirectoryTree(".", id="file_browser"),
-            id="files_container"
+        log_view_container = Vertical(log_filter_input, self.log_widget, id="log_view_container")
+        
+        path_changer_input = Input(
+            placeholder="Pfad eingeben (z.B. C:/ oder //Server/Share) und Enter drücken...", 
+            id="path_changer"
         )
+        file_browser_tree = FilteredDirectoryTree(".", id="file_browser")
+        file_browser_container = Vertical(path_changer_input, file_browser_tree, id="files_container")
 
         TS_WIDTH = 24
         PA_WIDTH = 10
@@ -230,25 +324,22 @@ class KNXLens(App):
         tabs.add_pane(TabPane("Gebäudestruktur", building_tree, id="building_pane"))
         tabs.add_pane(TabPane("Physikalische Adressen", pa_tree, id="pa_pane"))
         tabs.add_pane(TabPane("Gruppenadressen", ga_tree, id="ga_pane"))
+        tabs.add_pane(TabPane("Filter-Gruppen", named_filter_container, id="filter_pane"))
         tabs.add_pane(TabPane("Log-Ansicht", log_view_container, id="log_pane"))
         tabs.add_pane(TabPane("Dateien", file_browser_container, id="files_pane"))
+        
         logging.debug("build_ui_tabs: UI-Tabs erstellt.")
-    # --- ENDE SYNCHRONER START ---
-
+    
     def _reset_user_activity(self) -> None:
-        """Setzt den Timer für Inaktivität zurück und startet ggf. den Reload-Timer neu."""
         logging.debug("User activity detected, resetting idle timer.")
         self.last_user_activity = time.time()
-        
         if not self.log_reload_timer:
             log_file_path = self.config.get("log_file")
             if log_file_path and log_file_path.lower().endswith((".log", ".txt")):
                 self.action_toggle_log_reload(force_on=True)
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
-        """Wechselt das Verzeichnis des Datei-Browsers ODER setzt den Regex-Filter."""
         self._reset_user_activity() 
-        
         if event.input.id == "path_changer":
             raw_input = event.value.strip().strip('"').strip("'")
             if not raw_input: return
@@ -271,7 +362,6 @@ class KNXLens(App):
                         self.notify(f"Verzeichnis nicht gefunden: {target_path}", severity="error")
             except Exception as e:
                 self.notify(f"Pfad-Fehler: {e}", severity="error")
-
         elif event.input.id == "regex_filter_input":
             filter_text = event.value
             if not filter_text:
@@ -282,498 +372,258 @@ class KNXLens(App):
                 try:
                     self.regex_filter = re.compile(filter_text, re.IGNORECASE)
                     self.regex_filter_string = filter_text
-                    self.notify(f"Regex-Filter aktiv: '{filter_text}'")
+                    self.notify(f"Globaler AND-Regex-Filter aktiv: '{filter_text}'")
                 except re.error as e:
                     self.regex_filter = None
                     self.regex_filter_string = ""
                     self.notify(f"Ungültiger Regex: {e}", severity="error")
-            
-            self.paging_warning_shown = False # <-- POPUP-FLAG RESET
+            self.paging_warning_shown = False
             self.log_view_is_dirty = True
             self._refilter_log_view()
     
     def on_directory_tree_file_selected(self, event: DirectoryTree.FileSelected) -> None:
-        """Wird aufgerufen, wenn im Dateien-Tab eine Datei ausgewählt wird."""
         self._reset_user_activity() 
         event.stop()
         file_path = str(event.path)
-        
         if file_path.lower().endswith((".log", ".zip", ".txt")):
             self.notify(f"Lade Datei: {os.path.basename(file_path)}")
             self.config['log_file'] = file_path
-            
-            # --- SYNCHRONES NEULADEN ---
             self._reload_log_file_sync()
-            
-            self.query_one(TabbedContent).active = "log_pane"
-
-    def _populate_tree_from_data(self, tree: Tree, data: TreeData, expand_all: bool = False):
-        logging.debug(f"_populate_tree_from_data: Starte für Baum '{tree.id or 'unbekannt'}'.")
-        tree.clear()
-        def natural_sort_key(item: Tuple[str, Any]):
-            key_str = str(item[0])
-            return [int(c) if c.isdigit() else c.lower() for c in re.split('([0-9]+)', key_str)]
-        def add_nodes(parent_node: TreeNode, children_data: Dict[str, TreeData]):
-            for _, node_data in sorted(children_data.items(), key=natural_sort_key):
-                label = node_data.get("name")
-                if not label: continue
-                child_node = parent_node.add(label, data=node_data.get("data"))
-                if node_children := node_data.get("children"):
-                    add_nodes(child_node, node_children)
-        
-        if data and "children" in data:
-            add_nodes(tree.root, data["children"])
-        
-        logging.debug(f"_populate_tree_from_data: '{tree.id or 'unbekannt'}' Knoten hinzugefügt.")
-        
-        tree.root.collapse_all()
-        if expand_all:
-            tree.root.expand_all()
-
-    def _process_log_lines(self):
-        """
-        [SYNCHRON]
-        Filtert die in `self.cached_log_data` zwischengespeicherten,
-        angereicherten Log-Einträge basierend auf `self.selected_gas`
-        und füllt die `DataTable`.
-        """
-        if not self.log_widget: return
-        
-        try:
-            is_at_bottom = self.log_widget.scroll_y >= self.log_widget.max_scroll_y
-            
-            self.log_widget.clear()
-            has_selection = bool(self.selected_gas)
-            has_regex_filter = bool(self.regex_filter)
-    
-            if not self.cached_log_data:
-                 self.log_widget.add_row("[yellow]Keine Log-Daten geladen oder Log-Datei ist leer.[/yellow]")
-                 self.log_widget.caption = "Keine Log-Daten"
-                 return
-            
-            start_time = time.time()
-            log_caption = ""
-            log_entries_to_process = self.cached_log_data 
-            
-            if has_selection:
-                sorted_gas = sorted(list(self.selected_gas))
-                filter_info = f"Filtere Log für {len(sorted_gas)} GAs: {', '.join(sorted_gas)}"
-                logging.info(f"Applizieren des Log-Ansicht-Filters für {len(sorted_gas)} GAs.")
-                log_caption = f"Filter aktiv ({len(sorted_gas)} GAs)"
-            
-            if has_regex_filter:
-                log_caption += f" | Regex aktiv ('{self.regex_filter_string}')"
-
-            found_count = 0
-            rows_to_add = []
-            
-            logging.debug("Starte Filter-Loop...")
-            filter_start_time = time.time()
-            
-            for i, log_entry in enumerate(log_entries_to_process):
-                if has_selection and log_entry["ga"] not in self.selected_gas:
-                    continue 
-                if has_regex_filter:
-                    if not self.regex_filter.search(log_entry["search_string"]):
-                        continue 
-                rows_to_add.append((
-                    log_entry["timestamp"],
-                    log_entry["pa"],
-                    log_entry["pa_name"],
-                    log_entry["ga"],
-                    log_entry["ga_name"],
-                    log_entry["payload"]
-                ))
-            
-            found_count = len(rows_to_add)
-
-            filter_duration = time.time() - filter_start_time
-            logging.debug(f"Filter-Loop beendet in {filter_duration:.4f}s. {found_count} Zeilen gefunden.")
-
-            # --- PAGING-LOGIK (Limit GILT IMMER, nutzt self.max_log_lines) ---
-            if found_count > self.max_log_lines:
-                truncated_count = found_count - self.max_log_lines
-                caption_text = f" | Zeige letzte {self.max_log_lines} von {found_count} Treffern"
-                log_caption += caption_text
-                logging.warning(f"Zu viele Zeilen ({found_count}). Zeige nur die letzten {self.max_log_lines}.")
-                
-                rows_to_add = rows_to_add[-self.max_log_lines:]
-                
-                if not self.paging_warning_shown:
-                    self.notify(
-                        f"Anzeige auf {self.max_log_lines} Zeilen begrenzt ({truncated_count} ältere ausgeblendet).",
-                        title="Filter-Limit",
-                        severity="warning",
-                        timeout=10
-                    )
-                    self.paging_warning_shown = True 
-                
-            elif not has_selection and not has_regex_filter:
-                log_caption = f"Alle Einträge ({found_count})"
-            # --- ENDE PAGING-LOGIK ---
-
-            logging.debug(f"Starte log_widget.add_rows({len(rows_to_add)} Zeilen)...")
-            add_rows_start_time = time.time()
-
-            self.log_widget.add_rows(rows_to_add)
-            
-            add_rows_duration = time.time() - add_rows_start_time
-            logging.debug(f"log_widget.add_rows beendet in {add_rows_duration:.4f}s.")
-
-            duration = time.time() - start_time
-            logging.info(f"Log-Ansicht gefiltert. {len(rows_to_add)} Einträge in {duration:.4f}s gerendert.")
-            self.log_widget.caption = f"{len(rows_to_add)} Einträge angezeigt. ({duration:.2f}s) | {log_caption}"
-
-            if is_at_bottom:
-                self.log_widget.scroll_end(animate=False, duration=0.0)
-
-        except Exception as e:
-            logging.error(f"Schwerer Fehler in _process_log_lines: {e}", exc_info=True)
-            if self.log_widget:
-                self.log_widget.clear()
-                self.log_widget.add_row(f"[red]Fehler beim Verarbeiten der Log-Zeilen: {e}[/red]")
-
-
-    def _load_log_file_data_only(self) -> Tuple[bool, Optional[Exception]]:
-        """
-        [SYNCHRON]
-        Liest die Log-Datei (vollständig) von der Festplatte und parst sie
-        in `self.cached_log_data`. Führt KEINE UI-Aktionen aus.
-        Gibt (is_zip, Exception) zurück.
-        """
-        log_file_path = self.config.get("log_file") or os.path.join(self.config.get("log_path", "."), "knx_bus.log")
-
-        self.last_log_mtime = None
-        self.last_log_position = 0
-
-        if not os.path.exists(log_file_path):
-            logging.warning(f"Log-Datei nicht gefunden unter '{log_file_path}'")
-            self.cached_log_data = []
-            self.payload_history.clear()
-            return False, FileNotFoundError(f"Log-Datei nicht gefunden: {log_file_path}")
-        
-        start_time = time.time()
-        logging.info(f"Lese Log-Datei von Festplatte: '{log_file_path}'")
-        
-        is_zip = False
-        try:
-            is_zip = log_file_path.lower().endswith(".zip")
-            
-            lines = []
-            if is_zip:
-                with zipfile.ZipFile(log_file_path, 'r') as zf:
-                    log_files_in_zip = [name for name in zf.namelist() if name.lower().endswith('.log')]
-                    if not log_files_in_zip:
-                        raise FileNotFoundError("Keine .log-Datei im ZIP-Archiv gefunden.")
-                    with zf.open(log_files_in_zip[0]) as log_file:
-                        lines = io.TextIOWrapper(log_file, encoding='utf-8').readlines()
-            else:
-                with open(log_file_path, 'r', encoding='utf-8') as f:
-                    lines = f.readlines()
-                    self.last_log_position = f.tell()
-                self.last_log_mtime = os.path.getmtime(log_file_path)
-            
-            logging.debug("Starte parse_and_cache_log_data...")
-            self.payload_history, self.cached_log_data = parse_and_cache_log_data(
-                lines, 
-                self.project_data,
-                self.time_filter_start,
-                self.time_filter_end
-            )
-            logging.debug("Beende parse_and_cache_log_data.")
-            
-            duration = time.time() - start_time
-            logging.info(f"Log-Datei '{os.path.basename(log_file_path)}' in {duration:.2f}s gelesen und verarbeitet.")
-            return is_zip, None
-
-        except Exception as e:
-            logging.error(f"Fehler beim Verarbeiten von '{log_file_path}': {e}", exc_info=True)
-            self.cached_log_data = []
-            self.payload_history.clear()
-            return is_zip, e
-
-    def _reload_log_file_sync(self):
-        """
-        [SYNCHRON]
-        Wird aufgerufen, wenn der Benutzer eine neue Datei auswählt oder 'r' drückt.
-        Friert die UI während des Ladens ein.
-        """
-        self._reset_user_activity() 
-        logging.debug("_reload_log_file_sync: Starte synchrones Neuladen...")
-        
-        # 1. Daten laden (blockiert)
-        reload_start_time = time.time()
-        is_zip, error = self._load_log_file_data_only()
-        
-        # 2. UI-Update ausführen (blockiert)
-        if error:
-            if isinstance(error, FileNotFoundError):
-                self.log_widget.clear()
-                self.log_widget.add_row(f"[red]FEHLER: {error}[/red]")
-            else:
-                self.log_widget.clear()
-                self.log_widget.add_row(f"\n[red]Fehler beim Verarbeiten der Log-Datei: {error}[/red]")
-                self.log_widget.add_row(f"[dim]{traceback.format_exc()}[/dim]")
-            return
-
-        logging.info("Log-Daten neu geladen. Aktualisiere UI-Bäume und Log-Ansicht...")
-        start_time = time.time()
-        
-        logging.debug("Aktualisiere Baum-Labels...")
-        for tree in self.query(Tree):
-            if tree.id == "file_browser": continue
-            self._update_tree_labels_recursively(tree.root)
-        logging.debug("Baum-Labels aktualisiert.")
-
-        logging.debug("Starte _process_log_lines (initiale Log-Ansicht)...")
-        self.paging_warning_shown = False # <-- POPUP-FLAG RESET
-        self.log_view_is_dirty = True
-        self._process_log_lines()
-        self.log_view_is_dirty = False 
-        logging.debug("Beende _process_log_lines.")
-
-        if is_zip:
-            self.action_toggle_log_reload(force_off=True)
-        else:
-            self.action_toggle_log_reload(force_on=True)
-        
-        duration = time.time() - start_time
-        logging.info(f"UI-Aktualisierung nach Log-Laden in {duration:.2f}s abgeschlossen.")
-        logging.info(f"Gesamtes Neuladen (sync) dauerte {time.time() - reload_start_time:.4f}s")
-    # --- ENDE SYNCHRONER LADE-WORKFLOW ---
-
-    def _refilter_log_view(self) -> None:
-        """Wird aufgerufen, wenn Filter (GA/Regex) sich ändern."""
-        if not self.log_widget: return
-        logging.info("Log-Ansicht wird mit gecachten Daten neu gefiltert (synchron).")
-        self._process_log_lines()
-        self.log_view_is_dirty = False # Flag löschen nach dem Filtern
-
-    def _get_descendant_gas(self, node: TreeNode) -> Set[str]:
-        gas = set()
-        if isinstance(node.data, dict) and "gas" in node.data:
-            gas.update(node.data["gas"])
-        for child in node.children:
-            gas.update(self._get_descendant_gas(child))
-        return gas
-
-    # --- KORRIGIERTE SCHNELLE FUNKTIONEN (FIX FÜR TASTE 'A') ---
-    def _update_parent_prefixes_recursive(self, node: Optional[TreeNode]) -> None:
-        """
-        [PERFORMANCE-FIX - UP]
-        Aktualisiert rekursiv alle Eltern-Knoten (für [-] Status).
-        """
-        if not node: # Stop an der (unsichtbaren) Wurzel
-            return
-        
-        # Hole den reinen Label-Text (ohne altes Präfix)
-        display_label = re.sub(r"^(\[[ *\-]] )+", "", str(node.label))
-        
-        # 1. Präfix bestimmen
-        prefix = "[ ] "
-        all_descendant_gas = self._get_descendant_gas(node)
-        if all_descendant_gas:
-            selected_descendant_gas = self.selected_gas.intersection(all_descendant_gas)
-            if len(selected_descendant_gas) == len(all_descendant_gas): 
-                prefix = "[*] "
-            elif selected_descendant_gas: 
-                prefix = "[-] "
-        
-        # 2. Label setzen
-        node.set_label(prefix + display_label)
-
-        # 3. Rekursiv für Eltern aufrufen
-        if node.parent:
-            self._update_parent_prefixes_recursive(node.parent)
-
-    def _update_node_and_children_prefixes(self, node: TreeNode) -> None:
-        """
-        [PERFORMANCE-FIX - DOWN]
-        Aktualisiert rekursiv den Knoten selbst und alle Kinder.
-        """
-        display_label = ""
-        
-        # 1. Hole den reinen Label-Text
-        if isinstance(node.data, dict) and "original_name" in node.data:
-            # Dies ist ein Blatt-Knoten (CO, GA, etc.)
-            display_label = node.data["original_name"]
-            
-            # Behalte den Payload bei, falls er schon existiert
-            current_label = str(node.label)
-            payload_match = re.search(r"->\s*(\[bold yellow\].*)", current_label)
-            if payload_match:
-                display_label = f"{display_label} -> {payload_match.group(1)}"
-        else:
-            # Dies ist ein Eltern-Knoten (z.B. "Keller" oder "Gebäude")
-            display_label = re.sub(r"^(\[[ *\-]] )+", "", str(node.label))
-
-        # 2. Präfix bestimmen
-        prefix = "[ ] "
-        all_descendant_gas = self._get_descendant_gas(node)
-        if all_descendant_gas:
-            selected_descendant_gas = self.selected_gas.intersection(all_descendant_gas)
-            if len(selected_descendant_gas) == len(all_descendant_gas): 
-                prefix = "[*] "
-            elif selected_descendant_gas: 
-                prefix = "[-] "
-        
-        # 3. Label setzen
-        node.set_label(prefix + display_label)
-
-        # 4. Rekursiv für Kinder aufrufen
-        for child in node.children:
-            self._update_node_and_children_prefixes(child)
-    # --- ENDE KORRIGIERTE FUNKTIONEN ---
-
-    def _update_tree_labels_recursively(self, node: TreeNode) -> None:
-        """
-        [LANGSAME FUNKTION]
-        Lädt Payloads und aktualisiert den gesamten Baum.
-        Nur beim Start/Reload aufrufen!
-        """
-        display_label = ""
-        if isinstance(node.data, dict) and "original_name" in node.data:
-            original_name = node.data["original_name"]
-            display_label = original_name
-            
-            node_gas = node.data.get("gas", set())
-            if node_gas:
-                combined_history = []
-                for ga in node_gas:
-                    if ga in self.payload_history:
-                        combined_history.extend(self.payload_history[ga])
-                
-                if combined_history:
-                    combined_history.sort(key=lambda x: x['timestamp'])
-                    latest_payloads = [item['payload'] for item in combined_history[-3:]]
-                    current_payload = latest_payloads[-1]
-                    previous_payloads = latest_payloads[-2::-1]
-                    
-                    payload_str = f"[bold yellow]{current_payload}[/]"
-                    if previous_payloads:
-                        history_str = ", ".join(previous_payloads)
-                        payload_str += f" [dim]({history_str})[/dim]"
-                    
-                    display_label = f"{original_name} -> {payload_str}"
-        else:
-            # Dies ist ein Eltern-Knoten (z.B. "Keller")
-            display_label = re.sub(r"^(\[[ *\-]] )+", "", str(node.label))
-
-        prefix = "[ ] "
-        
-        all_descendant_gas = self._get_descendant_gas(node)
-        if all_descendant_gas:
-            selected_descendant_gas = self.selected_gas.intersection(all_descendant_gas)
-            if len(selected_descendant_gas) == len(all_descendant_gas): 
-                prefix = "[*] "
-            elif selected_descendant_gas: 
-                prefix = "[-] "
-            else: 
-                prefix = "[ ] "
-
-        node.set_label(prefix + display_label)
-
-        for child in node.children:
-            self._update_tree_labels_recursively(child)
-
-
+            self.query_one(TabbedContent).activate_tab("log_pane")
 
     def action_toggle_selection(self) -> None:
         self._reset_user_activity() 
         try:
-            active_tree = self.query_one(TabbedContent).active_pane.query_one(Tree)
-            if active_tree.id == "file_browser": return
-
-            node = active_tree.cursor_node
-            if not node: return
+            # --- NEUER ANSATZ: Das fokussierte Widget holen ---
+            focused_widget = self.app.focused
             
-            # Hole alle GAs von diesem Knoten UND seinen Kindern
-            descendant_gas = self._get_descendant_gas(node)
+            tree = None
             
-            # Spezialfall: Root-Knoten (wie "Gebäude") hat keine GAs,
-            # aber wir wollen trotzdem alle Kinder auswählen.
-            if not descendant_gas and (not node.parent or node.parent.id == "#tree-root"):
-                # Hole GAs von Kindern, wenn Root geklickt wird
-                for child in node.children:
-                    descendant_gas.update(self._get_descendant_gas(child))
-            elif not descendant_gas:
-                 return # Es ist ein Blatt ohne GAs
-
-            
-            node_label = re.sub(r"^(\[[ *\-]] )+", "", str(node.label))
-            if descendant_gas.issubset(self.selected_gas):
-                logging.info(f"Auswahl ENTFERNT für Knoten '{node_label}'. {len(descendant_gas)} GA(s) entfernt.")
-                self.selected_gas.difference_update(descendant_gas)
+            # Prüfen, ob das fokussierte Widget ein Baum ist (und nicht der file_browser)
+            if isinstance(focused_widget, Tree) and focused_widget.id != "file_browser":
+                tree = focused_widget
             else:
-                logging.info(f"Auswahl HINZUGEFÜGT für Knoten '{node_label}'. {len(descendant_gas)} GA(s) hinzugefügt.")
-                self.selected_gas.update(descendant_gas)
-            
-            self.paging_warning_shown = False # <-- POPUP-FLAG RESET
+                # Fallback: Versuche, den Baum im aktiven Tab zu finden
+                # (falls der Fokus z.B. auf dem Tab-Header lag)
+                try:
+                    active_pane = self.query_one(TabbedContent).active_pane
+                    tree = active_pane.query_one("Tree:not(#file_browser)")
+                except Exception:
+                    logging.warning("Aktion 'toggle_selection' konnte keinen fokussierten oder aktiven Baum finden.")
+                    return
+
+            if not tree:
+                logging.warning("Aktion 'toggle_selection' hat keinen gültigen Baum gefunden.")
+                return
+
+            # --- Ab hier ist der Code identisch zum Original ---
+            node = tree.cursor_node
+            if not node: return
+            if tree.id == "named_filter_tree":
+                if not node.data: return
+                filter_name = ""
+                if isinstance(node.data, tuple):
+                    filter_name = node.data[0]
+                else:
+                    filter_name = str(node.data)
+                rules = self.named_filters_rules.get(filter_name)
+                if not rules: return
+                if filter_name in self.active_named_filters:
+                    logging.info(f"Named Filter DEAKTIVIERT: '{filter_name}'")
+                    self.active_named_filters.remove(filter_name)
+                    self.selected_gas.difference_update(rules["gas"])
+                else:
+                    logging.info(f"Named Filter AKTIVIERT: '{filter_name}'")
+                    self.active_named_filters.add(filter_name)
+                    self.selected_gas.update(rules["gas"])
+                self._rebuild_active_regexes()
+                self._update_all_tree_prefixes()
+            elif tree.id != "file_browser":
+                descendant_gas = self._get_descendant_gas(node)
+                if not descendant_gas and (not node.parent or node.parent.id == "#tree-root"):
+                    for child in node.children:
+                        descendant_gas.update(self._get_descendant_gas(child))
+                elif not descendant_gas:
+                     return
+                node_label = re.sub(r"^(\[[ *\-]] )+", "", str(node.label))
+                if descendant_gas.issubset(self.selected_gas):
+                    logging.info(f"Auswahl ENTFERNT für Knoten '{node_label}'. {len(descendant_gas)} GA(s) entfernt.")
+                    self.selected_gas.difference_update(descendant_gas)
+                else:
+                    logging.info(f"Auswahl HINZUGEFÜGT für Knoten '{node_label}'. {len(descendant_gas)} GA(s) hinzugefügt.")
+                    self.selected_gas.update(descendant_gas)
+                logging.debug(f"Aktualisiere Präfixe AB '{node.label}'...")
+                self._update_node_and_children_prefixes(node)
+                if node.parent:
+                    self._update_parent_prefixes_recursive(node.parent)
+                self._update_named_filter_prefixes()
+                logging.debug(f"Präfix-Update beendet.")
+            self.paging_warning_shown = False 
             self.log_view_is_dirty = True
-            
-            # --- KORRIGIERTER PERFORMANCE-FIX ---
-            logging.debug(f"Aktualisiere Präfixe AB '{node.label}'...")
-            
-            # 1. Update den geklickten Knoten und alle seine Kinder (schnell)
-            self._update_node_and_children_prefixes(node)
-            
-            # 2. Update alle Eltern-Knoten (schnell)
-            if node.parent:
-                self._update_parent_prefixes_recursive(node.parent)
-                
-            logging.debug(f"Präfix-Update beendet.")
-            # --- ENDE FIX ---
-            
             if self.query_one(TabbedContent).active == "log_pane":
                 self._refilter_log_view()
-
         except Exception as e:
-            logging.error(f"Fehler bei action_toggle_selection: {e}", exc_info=True)            
-            
+            logging.error(f"Fehler bei action_toggle_selection: {e}", exc_info=True)
+
     def on_tabbed_content_tab_activated(self, event: TabbedContent.TabActivated) -> None:
-        """OPTIMIERT: Wird nur aktiv, wenn sich Filter geändert haben."""
+        """Aktualisiert den Footer und setzt den Fokus, wenn der Tab gewechselt wird."""
         self._reset_user_activity() 
         
+        pane_id = event.pane.id
+        logging.debug(f"Tab aktiviert: {pane_id}")
+
+        # 1. Footer-Text manuell aktualisieren
+        self.update_footer(pane_id)
+        
+        # --- FIX "TRÄGHEIT": Lade Baum-Payloads bei Bedarf nach ---
+        tree_id = f"#{pane_id.replace('_pane', '_tree')}" # z.B. "pa_pane" -> "#pa_tree"
+        if tree_id in self.trees_need_payload_update:
+            try:
+                self.notify(f"Lade Payloads für Baum '{tree_id}'...")
+                logging.info(f"Aktualisiere Labels (mit Payloads) für {tree_id}...")
+                start_time = time.time()
+                
+                self._update_tree_labels_recursively(self.query_one(tree_id, Tree).root)
+                
+                duration = time.time() - start_time
+                logging.info(f"Labels für {tree_id} in {duration:.4f}s aktualisiert.")
+                self.trees_need_payload_update.remove(tree_id)
+            except Exception as e:
+                logging.error(f"Fehler beim Nachladen der Labels für {tree_id}: {e}")
+        # --- ENDE FIX ---
+
+        # 2. Fokus für Tastatureingaben setzen
+        try:
+            if pane_id in ("building_pane", "pa_pane", "ga_pane", "filter_pane"):
+                event.pane.query_one(Tree).focus()
+            elif pane_id == "log_pane":
+                self.query_one("#regex_filter_input", Input).focus()
+            elif pane_id == "files_pane":
+                self.query_one("#path_changer", Input).focus()
+        except Exception as e:
+            logging.warning(f"Fehler beim Setzen des Fokus für Tab {pane_id}: {e}")
+
+        # 3. Log-Ansicht-Filterung (wie gehabt)
         if event.pane.id == "log_pane" and self.log_view_is_dirty:
             logging.info("Log-Ansicht-Tab wurde aktiviert und ist 'dirty'. Wende Filter neu an.")
             self._refilter_log_view()
         elif event.pane.id == "log_pane":
              logging.debug("Log-Ansicht-Tab aktiviert, aber 'clean'. Tue nichts.")
 
-    def action_copy_label(self) -> None:
-        self._reset_user_activity() 
+    def update_footer(self, pane_id: str) -> None:
+        """
+        Aktualisiert das Static-Widget (manual_footer) manuell.
+        """
         try:
-            active_tree = self.query_one(TabbedContent).active_pane.query_one(Tree)
-            node = active_tree.cursor_node
-            if node and isinstance(node.data, dict) and "original_name" in node.data:
-                self.notify(f"Kopiert: '{node.data['original_name']}'")
-            elif node:
-                label_text = str(node.label)
-                clean_label = re.sub(r"^(\[[ *\-]] )+", "", label_text)
-                clean_label = re.sub(r"\s*->\s*.*$", "", clean_label)
-                self.notify(f"Kopiert: '{clean_label}'")
-        except Exception:
-            self.notify("Konnte nichts kopieren.", severity="error")
+            footer_static = self.query_one("#manual_footer", Static)
+            
+            # Globale Tasten holen
+            global_bindings = self.global_bindings_display
+            
+            # Kontext-Tasten holen
+            context_bindings = self.tab_bindings_display.get(pane_id, [])
+            
+            all_bindings = global_bindings + context_bindings
+            
+            # Baue den Text-String
+            footer_text = "  ".join(
+                f"[bold]{b.key.upper()}[/]:{b.description}" 
+                for b in all_bindings
+            )
+            
+            # Setze den Text im Static-Widget
+            footer_static.update(footer_text)
+            
+        except Exception as e:
+            logging.error(f"Fehler beim Aktualisieren des Footers: {e}", exc_info=True)
+            try:
+                footer_static.update("[bold]Q[/]:Quit")
+            except:
+                pass 
 
     def action_open_log_file(self) -> None:
         """Wechselt zum 'Dateien'-Tab."""
         self._reset_user_activity() 
-        self.query_one(TabbedContent).active = "files_pane"
         try:
-            self.query_one("#file_browser").focus()
-        except:
-            pass
+            self.query_one(TabbedContent).activate_tab("files_pane")
+        except Exception as e:
+            logging.error(f"Konnte Tab 'files_pane' nicht aktivieren: {e}")
+            self.notify(f"Fehler beim Öffnen des Datei-Tabs: {e}", severity="error")
 
+    # ... (Alle anderen Aktionen: reload, save, delete, toggle_reload, time_filter, filter_tree bleiben gleich) ...
     def action_reload_log_file(self) -> None:
         logging.info("Log-Datei wird manuell von Festplatte neu geladen.")
         self._reload_log_file_sync()
     
+    def action_save_filter(self) -> None:
+        if not self.selected_gas:
+            self.notify("Keine GAs ausgewählt, nichts zu speichern.", severity="warning")
+            return
+        def save_callback(name: str):
+            if not name:
+                self.notify("Speichern abgebrochen.", severity="warning")
+                return
+            new_rules = sorted(list(self.selected_gas))
+            self.named_filters[name] = new_rules
+            self._save_named_filters()
+            self._load_named_filters()
+            self._populate_named_filter_tree()
+            self.notify(f"Filter '{name}' mit {len(new_rules)} GAs gespeichert.")
+        self.push_screen(FilterInputScreen(prompt="Aktuelle Auswahl speichern unter:"), save_callback)
+
+    def action_delete_item(self) -> None:
+        try:
+            active_pane = self.query_one(TabbedContent).active_pane
+            if active_pane.id != "filter_pane":
+                self.notify("Löschen ('d') ist nur im Tab 'Filter-Gruppen' aktiv.", severity="info")
+                return
+            tree = self.query_one("#named_filter_tree", Tree)
+            node = tree.cursor_node
+            if not node or not node.data:
+                self.notify("Kein Filter zum Löschen ausgewählt.", severity="warning")
+                return
+            if isinstance(node.data, tuple):
+                filter_name, rule_str = node.data
+                def confirm_rule_delete(confirm: str):
+                    if confirm.lower() in ["ja", "j", "yes", "y"]:
+                        try:
+                            self.named_filters[filter_name].remove(rule_str)
+                            self._save_named_filters()
+                            self._load_named_filters()
+                            self._populate_named_filter_tree()
+                            self.notify(f"Regel '{rule_str}' aus '{filter_name}' gelöscht.")
+                        except Exception as e:
+                            self.notify(f"Fehler beim Löschen der Regel: {e}", severity="error")
+                    else:
+                        self.notify("Löschen abgebrochen.")
+                self.push_screen(FilterInputScreen(prompt=f"Regel '{rule_str}' wirklich löschen? (Ja/Nein)"), confirm_rule_delete)
+            elif isinstance(node.data, str):
+                filter_name = str(node.data)
+                def confirm_filter_delete(confirm: str):
+                    if confirm.lower() in ["ja", "j", "yes", "y"]:
+                        try:
+                            del self.named_filters[filter_name]
+                            if filter_name in self.named_filters_rules:
+                                del self.named_filters_rules[filter_name]
+                            if filter_name in self.active_named_filters:
+                                self.active_named_filters.remove(filter_name)
+                            self._save_named_filters()
+                            self._populate_named_filter_tree()
+                            self._rebuild_active_regexes()
+                            self._update_all_tree_prefixes()
+                            self.log_view_is_dirty = True
+                            self._refilter_log_view()
+                            self.notify(f"Filter '{filter_name}' gelöscht.")
+                        except Exception as e:
+                            self.notify(f"Fehler beim Löschen: {e}", severity="error")
+                    else:
+                        self.notify("Löschen abgebrochen.")
+                self.push_screen(FilterInputScreen(prompt=f"Filter '{filter_name}' wirklich löschen? (Ja/Nein)"), confirm_filter_delete)
+        except Exception as e:
+            logging.error(f"Fehler bei action_delete_item: {e}", exc_info=True)
+    
     def action_toggle_log_reload(self, force_on: bool = False, force_off: bool = False) -> None:
-        """Schaltet den Auto-Reload-Timer um (oder erzwingt ihn)."""
-        
-        # --- Nutzt jetzt self.reload_interval ---
         TIMER_INTERVAL = self.reload_interval 
-        
         if force_off:
             if self.log_reload_timer:
                 self.log_reload_timer.stop()
@@ -782,7 +632,6 @@ class KNXLens(App):
                     self.notify("Log Auto-Reload [bold red]AUS[/] (Archiv/Fehler).", title="Log Ansicht")
                 logging.info("Auto-Reload gestoppt (force_off).")
             return
-
         if force_on:
             self.last_user_activity = time.time() 
             if not self.log_reload_timer:
@@ -790,7 +639,6 @@ class KNXLens(App):
                 self.notify(f"Log Auto-Reload [bold green]EIN[/] ({TIMER_INTERVAL}s).", title="Log Ansicht")
                 logging.info(f"Auto-Reload (effizient) für .log-Datei gestartet (Intervall: {TIMER_INTERVAL}s).")
             return
-
         self._reset_user_activity() 
         if self.log_reload_timer:
             self.log_reload_timer.stop()
@@ -805,141 +653,27 @@ class KNXLens(App):
                 logging.info(f"Auto-Reload (effizient) manuell aktiviert (Intervall: {TIMER_INTERVAL}s).")
             else:
                 self.notify("Auto-Reload nur für .log/.txt-Dateien verfügbar.", severity="warning")
-
-
-    def _efficient_log_tail(self) -> None:
-        """
-        [TIMER]
-        Prüft effizient auf Log-Änderungen ('tail -f'-Logik) 
-        und parst nur neue Zeilen.
-        """
-        
-        idle_duration = time.time() - self.last_user_activity
-        if idle_duration > 3600:
-            self.notify("Log Auto-Reload wegen Inaktivität pausiert.", title="Log Ansicht")
-            logging.info("Auto-Reload wegen Inaktivität (1h) pausiert.")
-            self.action_toggle_log_reload(force_off=True) 
-            return 
-
-        log_file_path = self.config.get("log_file")
-        
-        if not log_file_path or not log_file_path.lower().endswith((".log", ".txt")):
-            self.action_toggle_log_reload(force_off=True)
-            return
-
-        try:
-            current_mtime = os.path.getmtime(log_file_path)
-            if current_mtime == self.last_log_mtime:
-                return 
-            
-            logging.debug(f"Log-Änderung erkannt (mtime {current_mtime}), lese ab Position {self.last_log_position}.")
-            self.last_log_mtime = current_mtime
-
-            with open(log_file_path, 'r', encoding='utf-8') as f:
-                f.seek(self.last_log_position)
-                new_lines = f.readlines()
-                self.last_log_position = f.tell()
-            
-            if not new_lines:
-                logging.debug("Log-Änderung war ein 'touch', keine neuen Zeilen.")
-                return
-            
-            new_cached_items = append_new_log_lines(
-                new_lines, 
-                self.project_data,
-                self.payload_history,
-                self.cached_log_data,
-                self.time_filter_start,
-                self.time_filter_end
-            )
-            
-            if not new_cached_items:
-                logging.debug("Keine neuen Zeilen nach Filterung (z.B. Zeitfilter).")
-                return
-
-            logging.debug(f"{len(new_cached_items)} neue Zeilen verarbeitet. Aktualisiere Tabelle...")
-
-            has_selection = bool(self.selected_gas)
-            has_regex_filter = bool(self.regex_filter)
-            rows_to_add = []
-
-            logging.debug(f"Filtere {len(new_cached_items)} neue Zeilen (GA: {has_selection}, Regex: {has_regex_filter})...")
-            
-            for item in new_cached_items:
-                if has_selection and item["ga"] not in self.selected_gas:
-                    continue
-                if has_regex_filter:
-                    if not self.regex_filter.search(item["search_string"]):
-                        continue
-                rows_to_add.append((
-                    item["timestamp"], item["pa"], item["pa_name"],
-                    item["ga"], item["ga_name"], item["payload"]
-                ))
-            
-            logging.debug(f"{len(rows_to_add)} neue Zeilen passen zu den Filtern.")
-            
-            if not rows_to_add:
-                return 
-
-            is_at_bottom = self.log_widget.scroll_y >= self.log_widget.max_scroll_y
-            
-            # --- POPUP-SPAM-FIX: Check enthält jetzt Filter-Status ---
-            total_rows = self.log_widget.row_count + len(rows_to_add)
-            
-            # Nur neu laden, wenn KEIN Filter aktiv ist UND wir das Limit überschreiten
-            if not has_selection and not has_regex_filter and total_rows > self.max_log_lines:
-                logging.info(f"Tailing (ohne Filter) überschreitet Anzeigelimit ({total_rows} > {self.max_log_lines}). Lade Ansicht neu...")
-                self.log_view_is_dirty = True
-                self._refilter_log_view() # Baut die Tabelle mit den letzten 10k neu auf
-            else:
-                # Sonst: Einfach hinzufügen (schnell und leise)
-                self.log_widget.add_rows(rows_to_add)
-                if is_at_bottom:
-                    self.log_widget.scroll_end(animate=False, duration=0.0)
-            # --- ENDE POPUP-FIX ---
-
-            # --- PERFORMANCE-FIX: Label-Update aus Tailing entfernt ---
-            
-        except FileNotFoundError:
-            self.notify(f"Log-Datei '{log_file_path}' nicht mehr gefunden.", severity="error")
-            self.action_toggle_log_reload(force_off=True)
-        except Exception as e:
-            logging.error(f"Fehler im efficient_log_tail: {e}", exc_info=True)
-            self.notify(f"Fehler beim Log-Reload: {e}", severity="error")
-            self.action_toggle_log_reload(force_off=True)
             
     def action_time_filter(self) -> None:
         self._reset_user_activity() 
         def parse_time_input(time_str: str) -> Optional[datetime_time]:
-            if not time_str:
-                return None
-            try:
-                return datetime.strptime(time_str, "%H:%M:%S").time()
+            if not time_str: return None
+            try: return datetime.strptime(time_str, "%H:%M:%S").time()
             except ValueError:
-                try:
-                    return datetime.strptime(time_str, "%H:%M").time()
+                try: return datetime.strptime(time_str, "%H:%M").time()
                 except ValueError:
-                    self.notify(f"Ungültiges Zeitformat: '{time_str}'. Bitte HH:MM oder HH:MM:SS verwenden.",
-                                severity="error", timeout=5)
+                    self.notify(f"Ungültiges Zeitformat: '{time_str}'. Bitte HH:MM oder HH:MM:SS verwenden.", severity="error", timeout=5)
                     return None
-
         def handle_filter_result(result: Tuple[Optional[str], Optional[str]]):
             start_str, end_str = result
-            
             if start_str is None and end_str is None:
                 self.notify("Zeitfilterung abgebrochen.")
                 return
-
             new_start = parse_time_input(start_str) if start_str else None
             new_end = parse_time_input(end_str) if end_str else None
-            
-            if (start_str and new_start is None) or \
-               (end_str and new_end is None):
-                return
-
+            if (start_str and new_start is None) or (end_str and new_end is None): return
             self.time_filter_start = new_start
             self.time_filter_end = new_end
-            
             if self.time_filter_start or self.time_filter_end:
                 start_log = self.time_filter_start.strftime('%H:%M:%S') if self.time_filter_start else "Anfang"
                 end_log = self.time_filter_end.strftime('%H:%M:%S') if self.time_filter_end else "Ende"
@@ -948,61 +682,12 @@ class KNXLens(App):
             else:
                 logging.info("Zeitfilter entfernt.")
                 self.notify("Zeitfilter entfernt.")
-            
-            self.paging_warning_shown = False # <-- POPUP-FLAG RESET
+            self.paging_warning_shown = False
             self.log_view_is_dirty = True
-            # --- SYNCHRONES NEULADEN ---
             self._reload_log_file_sync()
-
         start_val = self.time_filter_start.strftime('%H:%M:%S') if self.time_filter_start else ""
         end_val = self.time_filter_end.strftime('%H:%M:%S') if self.time_filter_end else ""
-        
         self.push_screen(TimeFilterScreen(start_val, end_val), handle_filter_result)
-
-    def _filter_tree_data(self, original_data: TreeData, filter_text: str) -> Tuple[Optional[TreeData], bool]:
-        if not original_data: return None, False
-        
-        node_name_to_check = original_data.get("data", {}).get("original_name") or original_data.get("name", "")
-        is_direct_match = filter_text in node_name_to_check.lower()
-
-        if is_direct_match: return original_data.copy(), True
-
-        if original_children := original_data.get("children"):
-            filtered_children = {}
-            has_matching_descendant = False
-            for key, child_data in original_children.items():
-                filtered_child_data, child_has_match = self._filter_tree_data(child_data, filter_text)
-                if child_has_match and filtered_child_data:
-                    has_matching_descendant = True
-                    filtered_children[key] = child_data
-            
-            if has_matching_descendant:
-                new_node_data = original_data.copy()
-                new_node_data["children"] = filtered_children
-                return new_node_data, True
-        return None, False
-
-    def action_reset_filter(self) -> None:
-        self._reset_user_activity() 
-        try:
-            tabs = self.query_one(TabbedContent)
-            active_pane = tabs.active_pane
-            tree = active_pane.query_one(Tree)
-            
-            original_data = None
-            if tabs.active == "building_pane": original_data = self.building_tree_data
-            elif tabs.active == "pa_pane": original_data = self.pa_tree_data
-            elif tabs.active == "ga_pane": original_data = self.ga_tree_data
-            
-            if original_data:
-                logging.info(f"Baumfilter für '{tabs.active}' wird zurückgesetzt.")
-                self._populate_tree_from_data(tree, original_data)
-                self.notify("Filter zurückgesetzt.")
-            else:
-                self.notify("Konnte Originaldaten für Reset nicht finden.", severity="warning")
-        except Exception as e:
-            logging.error(f"Fehler beim Zurücksetzen des Filters: {e}", exc_info=True)
-            self.notify("Kein aktiver Baum zum Zurücksetzen gefunden.", severity="error")
 
     def action_filter_tree(self) -> None:
         self._reset_user_activity() 
@@ -1013,53 +698,170 @@ class KNXLens(App):
         except Exception:
             self.notify("Kein aktiver Baum zum Filtern gefunden.", severity="error")
             return
-
         def filter_callback(filter_text: str):
             if not filter_text:
                 self.action_reset_filter()
                 return
-            
             lower_filter_text = filter_text.lower()
             self.notify(f"Filtere Baum mit: '{filter_text}'...")
             logging.info(f"Baumfilterung für Tab '{tabs.active}' gestartet mit Text: '{filter_text}'")
             start_time = time.time()
-
             original_data = None
             if tabs.active == "building_pane": original_data = self.building_tree_data
             elif tabs.active == "pa_pane": original_data = self.pa_tree_data
             elif tabs.active == "ga_pane": original_data = self.ga_tree_data
-            
             if not original_data:
+                if tabs.active == "filter_pane":
+                    self.notify("Filtern für Named Filters noch nicht implementiert.", severity="warning")
+                    return
                 self.notify("Keine Daten zum Filtern für diesen Tab gefunden.", severity="error")
                 return
-
             filtered_data, has_matches = self._filter_tree_data(original_data, lower_filter_text)
-            
             duration = time.time() - start_time
             logging.info(f"Baumfilterung abgeschlossen in {duration:.4f}s. Treffer gefunden: {has_matches}")
-
             if not has_matches:
                 self.notify(f"Keine Treffer für '{filter_text}' gefunden.")
-            
             self._populate_tree_from_data(tree, filtered_data or {}, expand_all=True)
 
+
+    def action_reset_filter(self) -> None:
+        """Setzt den aktuell aktiven Baum auf den ungefilterten Zustand zurück."""
+        self._reset_user_activity()
+        try:
+            tabs = self.query_one(TabbedContent)
+            active_pane = tabs.active_pane
+            tree = active_pane.query_one(Tree)
+            
+            original_data = None
+            if tabs.active == "building_pane": original_data = self.building_tree_data
+            elif tabs.active == "pa_pane": original_data = self.pa_tree_data
+            elif tabs.active == "ga_pane": original_data = self.ga_tree_data
+            elif tabs.active == "filter_pane":
+                self._populate_named_filter_tree()
+                self.notify("Filter-Baum neu geladen.")
+                return
+            elif tabs.active == "files_pane":
+                return # Keine Aktion für den Dateibaum
+                
+            if original_data:
+                self._populate_tree_from_data(tree, original_data, expand_all=False)
+                
+                # WICHTIG: Nach dem Neuladen des Baums gehen Payloads verloren.
+                # Wir müssen ein Payload-Update für diesen Baum erzwingen.
+                tree_id = f"#{tree.id}"
+                if tree_id not in self.trees_need_payload_update:
+                    self.trees_need_payload_update.add(tree_id)
+                    # Manuell die Ladefunktion aufrufen, da der Tab bereits aktiv ist
+                    self.call_later(self._trigger_payload_update_for_active_tab)
+
+                self.notify("Baumfilter zurückgesetzt.")
+                logging.info(f"Baumfilter für {tabs.active} zurückgesetzt.")
+            
+        except Exception as e:
+            logging.error(f"Fehler bei action_reset_filter: {e}", exc_info=True)
+            self.notify("Fehler beim Zurücksetzen des Filters.", severity="error")
+            
+    def action_reset_filter(self) -> None:
+        """Setzt den aktuell aktiven Baum auf den ungefilterten Zustand zurück."""
+        self._reset_user_activity()
+        try:
+            tabs = self.query_one(TabbedContent)
+            active_pane = tabs.active_pane
+            tree = active_pane.query_one(Tree)
+            
+            original_data = None
+            if tabs.active == "building_pane": original_data = self.building_tree_data
+            elif tabs.active == "pa_pane": original_data = self.pa_tree_data
+            elif tabs.active == "ga_pane": original_data = self.ga_tree_data
+            elif tabs.active == "filter_pane":
+                self._populate_named_filter_tree()
+                self.notify("Filter-Baum neu geladen.")
+                return
+            elif tabs.active == "files_pane":
+                return # Keine Aktion für den Dateibaum
+                
+            if original_data:
+                self._populate_tree_from_data(tree, original_data, expand_all=False)
+                
+                # WICHTIG: Nach dem Neuladen des Baums gehen Payloads verloren.
+                # Wir müssen ein Payload-Update für diesen Baum erzwingen.
+                tree_id = f"#{tree.id}"
+                if tree_id not in self.trees_need_payload_update:
+                    self.trees_need_payload_update.add(tree_id)
+                    # Manuell die Ladefunktion aufrufen, da der Tab bereits aktiv ist
+                    self.call_later(self._trigger_payload_update_for_active_tab)
+
+                self.notify("Baumfilter zurückgesetzt.")
+                logging.info(f"Baumfilter für {tabs.active} zurückgesetzt.")
+            
+        except Exception as e:
+            logging.error(f"Fehler bei action_reset_filter: {e}", exc_info=True)
+            self.notify("Fehler beim Zurücksetzen des Filters.", severity="error")
+
+    def _trigger_payload_update_for_active_tab(self):
+        """Hilfsfunktion, um das Payload-Update nach dem Reset auszulösen."""
+        try:
+            active_tab_id = self.query_one(TabbedContent).active
+            active_pane = self.query_one(f"#{active_tab_id}")
+            # Simuliere das erneute Aktivieren des Tabs, um das Laden auszulösen
+            self.on_tabbed_content_tab_activated(
+                TabbedContent.TabActivated(
+                    self.query_one(TabbedContent), 
+                    active_pane
+                )
+            )
+        except Exception as e:
+             logging.error(f"Fehler beim Triggern des Payload-Updates: {e}")
+
     def on_resize(self, event: events.Resize) -> None:
-        if not self.log_widget:
-            return
-
+        # (Bleibt gleich)
+        if not self.log_widget: return
         logging.debug(f"on_resize: Fenstergröße geändert auf {event.size.width}. Berechne Spalten neu.")
-
         TS_WIDTH = 24
         PA_WIDTH = 10
         GA_WIDTH = 10
         PAYLOAD_WIDTH = 25
         COLUMN_SEPARATORS_WIDTH = 6 
         fixed_width = TS_WIDTH + PA_WIDTH + GA_WIDTH + PAYLOAD_WIDTH + COLUMN_SEPARATORS_WIDTH
-        
         available_width = event.size.width
-        remaining_width = available_width - fixed_width - 4 # Puffer
+        remaining_width = available_width - fixed_width - 4
         name_width = max(10, remaining_width // 2)
+        try:
+            self.log_widget.columns["pa_name"].width = name_width
+            self.log_widget.columns["ga_name"].width = name_width
+        except KeyError:
+            logging.warning("on_resize: Spalten 'pa_name' oder 'ga_name' nicht gefunden zum Anpassen.")
 
+
+    def _trigger_payload_update_for_active_tab(self):
+        """Hilfsfunktion, um das Payload-Update nach dem Reset auszulösen."""
+        try:
+            active_tab_id = self.query_one(TabbedContent).active
+            active_pane = self.query_one(f"#{active_tab_id}")
+            # Simuliere das erneute Aktivieren des Tabs, um das Laden auszulösen
+            self.on_tabbed_content_tab_activated(
+                TabbedContent.TabActivated(
+                    self.query_one(TabbedContent), 
+                    active_pane
+                )
+            )
+        except Exception as e:
+             logging.error(f"Fehler beim Triggern des Payload-Updates: {e}")
+
+
+    def on_resize(self, event: events.Resize) -> None:
+        # (Bleibt gleich)
+        if not self.log_widget: return
+        logging.debug(f"on_resize: Fenstergröße geändert auf {event.size.width}. Berechne Spalten neu.")
+        TS_WIDTH = 24
+        PA_WIDTH = 10
+        GA_WIDTH = 10
+        PAYLOAD_WIDTH = 25
+        COLUMN_SEPARATORS_WIDTH = 6 
+        fixed_width = TS_WIDTH + PA_WIDTH + GA_WIDTH + PAYLOAD_WIDTH + COLUMN_SEPARATORS_WIDTH
+        available_width = event.size.width
+        remaining_width = available_width - fixed_width - 4
+        name_width = max(10, remaining_width // 2)
         try:
             self.log_widget.columns["pa_name"].width = name_width
             self.log_widget.columns["ga_name"].width = name_width
@@ -1068,47 +870,39 @@ class KNXLens(App):
     
 ### --- START ---
 def main():
+    # (Bleibt gleich)
     try:
         logging.basicConfig(
             level=LOG_LEVEL, 
             filename='knx_lens.log', 
             filemode='w',
-            format='%(asctime)s - %(levelname)s - %(name)s - %(message)s', # Name hinzugefügt
+            format='%(asctime)s - %(levelname)s - %(name)s - %(message)s',
             encoding='utf-8'
         )
         logging.info("Anwendung gestartet.")
-
         if not os.path.exists("knx-lens.css"):
             logging.warning("knx-lens.css nicht gefunden. Die App wird nicht korrekt dargestellt.")
             print("WARNUNG: 'knx-lens.css' nicht im selben Verzeichnis gefunden.", file=sys.stderr)
-        
         load_dotenv()
         parser = argparse.ArgumentParser(description="KNX-Lens")
         parser.add_argument("--path", help="Pfad zur .knxproj Datei (überschreibt .env)")
         parser.add_argument("--log-file", help="Pfad zur Log-Datei für die Filterung (überschreibt .env)")
         parser.add_argument("--password", help="Passwort für die Projektdatei (überschreibt .env)")
         args = parser.parse_args()
-
         config = {
             'knxproj_path': args.path or os.getenv('KNX_PROJECT_PATH'),
             'log_file': args.log_file or os.getenv('LOG_FILE'),
             'password': args.password or os.getenv('KNX_PASSWORD'),
             'log_path': os.getenv('LOG_PATH'),
-            
-            # --- NEU: ENV-Variablen werden hier geladen ---
             'max_log_lines': os.getenv('MAX_LOG_LINES', '10000'),
             'reload_interval': os.getenv('RELOAD_INTERVAL', '5.0')
-            # --- ENDE NEU ---
         }
-
         if not config['knxproj_path']:
             logging.critical("Projektpfad nicht gefunden.")
             print("FEHLER: Projektpfad nicht gefunden. Bitte 'setup.py' ausführen oder mit --path angeben.", file=sys.stderr)
             sys.exit(1)
-        
         app = KNXLens(config=config)
         app.run()
-
     except Exception:
         logging.critical("Unbehandelter Fehler in der main() Funktion", exc_info=True)
         traceback.print_exc(file=sys.stderr)

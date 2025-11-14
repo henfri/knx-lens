@@ -3,3 +3,4 @@
     xknx
     xknxproject
     textual-serve
+    PyYAML
