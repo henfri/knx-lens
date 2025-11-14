@@ -551,31 +551,57 @@ class KNXLens(App):
             gas.update(self._get_descendant_gas(child))
         return gas
 
-    # --- KORRIGIERTE SCHNELLE FUNKTION ---
-    def _update_node_prefix(self, node: TreeNode) -> None:
+    # --- KORRIGIERTE SCHNELLE FUNKTIONEN (FIX FÜR TASTE 'A') ---
+    def _update_parent_prefixes_recursive(self, node: Optional[TreeNode]) -> None:
         """
-        [PERFORMANCE-FIX]
-        Aktualisiert NUR das Präfix ([ ], [*], [-]) eines Knotens.
-        Dies ist extrem schnell und vermeidet das Neuladen von Payloads.
+        [PERFORMANCE-FIX - UP]
+        Aktualisiert rekursiv alle Eltern-Knoten (für [-] Status).
         """
-        logging.debug(f"Aktualisiere Präfix für Knoten '{node.label}'")
+        if not node: # Stop an der (unsichtbaren) Wurzel
+            return
+        
+        # Hole den reinen Label-Text (ohne altes Präfix)
+        display_label = re.sub(r"^(\[[ *\-]] )+", "", str(node.label))
+        
+        # 1. Präfix bestimmen
+        prefix = "[ ] "
+        all_descendant_gas = self._get_descendant_gas(node)
+        if all_descendant_gas:
+            selected_descendant_gas = self.selected_gas.intersection(all_descendant_gas)
+            if len(selected_descendant_gas) == len(all_descendant_gas): 
+                prefix = "[*] "
+            elif selected_descendant_gas: 
+                prefix = "[-] "
+        
+        # 2. Label setzen
+        node.set_label(prefix + display_label)
 
-        # 1. Hole den aktuellen Label-Text (ohne altes Präfix)
+        # 3. Rekursiv für Eltern aufrufen
+        if node.parent:
+            self._update_parent_prefixes_recursive(node.parent)
+
+    def _update_node_and_children_prefixes(self, node: TreeNode) -> None:
+        """
+        [PERFORMANCE-FIX - DOWN]
+        Aktualisiert rekursiv den Knoten selbst und alle Kinder.
+        """
         display_label = ""
+        
+        # 1. Hole den reinen Label-Text
         if isinstance(node.data, dict) and "original_name" in node.data:
-            # This is a leaf-node (CO, GA, Device, etc.)
+            # Dies ist ein Blatt-Knoten (CO, GA, etc.)
             display_label = node.data["original_name"]
             
-            # Behalte den Payload bei, falls vorhanden
+            # Behalte den Payload bei, falls er schon existiert
             current_label = str(node.label)
             payload_match = re.search(r"->\s*(\[bold yellow\].*)", current_label)
             if payload_match:
                 display_label = f"{display_label} -> {payload_match.group(1)}"
         else:
-            # This is a parent/root node (e.g., "Gebäude", "Keller")
+            # Dies ist ein Eltern-Knoten (z.B. "Keller" oder "Gebäude")
             display_label = re.sub(r"^(\[[ *\-]] )+", "", str(node.label))
 
-        # 2. Präfix bestimmen (This logic is correct and universal)
+        # 2. Präfix bestimmen
         prefix = "[ ] "
         all_descendant_gas = self._get_descendant_gas(node)
         if all_descendant_gas:
@@ -588,10 +614,10 @@ class KNXLens(App):
         # 3. Label setzen
         node.set_label(prefix + display_label)
 
-        # 4. Rekursiv für Eltern aufrufen
-        if node.parent:
-            self._update_node_prefix(node.parent)
-    # --- ENDE KORRIGIERTE FUNKTION ---
+        # 4. Rekursiv für Kinder aufrufen
+        for child in node.children:
+            self._update_node_and_children_prefixes(child)
+    # --- ENDE KORRIGIERTE FUNKTIONEN ---
 
     def _update_tree_labels_recursively(self, node: TreeNode) -> None:
         """
@@ -624,6 +650,7 @@ class KNXLens(App):
                     
                     display_label = f"{original_name} -> {payload_str}"
         else:
+            # Dies ist ein Eltern-Knoten (z.B. "Keller")
             display_label = re.sub(r"^(\[[ *\-]] )+", "", str(node.label))
 
         prefix = "[ ] "
@@ -653,9 +680,16 @@ class KNXLens(App):
 
             node = active_tree.cursor_node
             if not node: return
+            
+            # Hole alle GAs von diesem Knoten UND seinen Kindern
             descendant_gas = self._get_descendant_gas(node)
-            if not descendant_gas and not node.parent: # Erlaube Klick auf Root-Knoten
-                 descendant_gas = self._get_descendant_gas(node) # (bleibt leer, aber überspringt Check)
+            
+            # Spezialfall: Root-Knoten (wie "Gebäude") hat keine GAs,
+            # aber wir wollen trotzdem alle Kinder auswählen.
+            if not descendant_gas and not node.parent:
+                # Hole GAs von Kindern, wenn Root geklickt wird
+                for child in node.children:
+                    descendant_gas.update(self._get_descendant_gas(child))
             elif not descendant_gas:
                  return # Es ist ein Blatt ohne GAs
 
@@ -671,9 +705,16 @@ class KNXLens(App):
             self.paging_warning_shown = False # <-- POPUP-FLAG RESET
             self.log_view_is_dirty = True
             
-            # --- PERFORMANCE-FIX: Nur Präfixe aktualisieren ---
-            # --- CRASH-FIX: Fehlerhafter Log-Befehl entfernt ---
-            self._update_node_prefix(node) # Ruft die neue, schnelle Funktion auf
+            # --- KORRIGIERTER PERFORMANCE-FIX ---
+            logging.debug(f"Aktualisiere Präfixe AB '{node.label}'...")
+            
+            # 1. Update den geklickten Knoten und alle seine Kinder (schnell)
+            self._update_node_and_children_prefixes(node)
+            
+            # 2. Update alle Eltern-Knoten (schnell)
+            if node.parent:
+                self._update_parent_prefixes_recursive(node.parent)
+                
             logging.debug(f"Präfix-Update beendet.")
             # --- ENDE FIX ---
             
