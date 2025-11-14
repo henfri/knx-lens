@@ -127,6 +127,11 @@ KNX_PROJECT_PATH="C:/path/to/your/project.knxproj"
 KNX_PASSWORD="YOUR_PROJECT_PASSWORD" # Only fill in if the file is password-protected
 ```
 
+Further ENV Variables, to tweak the behaviour:
+MAX_LOG_LINES (Standard: 10000)
+RELOAD_INTERVAL (Standard: 5.0)
+Be aware, that these have a performance-Impact.
+
 **Important Environment Variables:**
 
 * `LOG_PATH`: Path to the **directory** for `knx-lens-logger.py` to create its rotating logs.

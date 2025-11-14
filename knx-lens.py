@@ -46,7 +46,7 @@ from knx_tui_screens import FilterInputScreen, TimeFilterScreen, FilteredDirecto
 ### --- SETUP & KONSTANTEN ---
 LOG_LEVEL = logging.INFO
 TreeData = Dict[str, Any]
-MAX_LOG_LINES_NO_FILTER = 10000 
+# MAX_LOG_LINES_NO_FILTER = 10000 # <-- Wird jetzt per ENV gesetzt
 
 ### --- TUI: HAUPTANWENDUNG ---
 class KNXLens(App):
@@ -86,10 +86,18 @@ class KNXLens(App):
         self.log_view_is_dirty: bool = True 
         self.last_log_mtime: Optional[float] = None
         self.last_log_position: int = 0
-        
-        # --- Flag für Popup-Spam ---
         self.paging_warning_shown: bool = False
-        # ---
+
+        # --- NEU: Konfigurierbare Werte ---
+        try:
+            self.max_log_lines = int(self.config.get('max_log_lines', 10000))
+        except ValueError:
+            self.max_log_lines = 10000
+        try:
+            self.reload_interval = float(self.config.get('reload_interval', 5.0))
+        except ValueError:
+            self.reload_interval = 5.0
+        # --- ENDE NEU ---
 
 
     def compose(self) -> ComposeResult:
@@ -105,10 +113,10 @@ class KNXLens(App):
         except Exception:
             logging.critical("Konnte UI-Fehler nicht anzeigen.", exc_info=True)
 
-    # --- GEÄNDERTER SYNCHRONER START (MIT CALL_LATER) ---
+    # --- SYNCHRONER START ---
     def on_mount(self) -> None:
-        """Lädt Projekt + baut UI (schnell), DANN lädt Logs (langsam)."""
-        logging.debug("on_mount: Starte 'UI-First'-Laden...")
+        """Lädt ALLES (Projekt UND Logs) synchron, bevor die UI angezeigt wird."""
+        logging.debug("on_mount: Starte synchrones Laden...")
         start_time = time.time()
         
         try:
@@ -123,50 +131,25 @@ class KNXLens(App):
             self.pa_tree_data = build_pa_tree_data(self.project_data)
             self.building_tree_data = build_building_tree_data(self.project_data)
             logging.debug(f"Baum-Daten gebaut in {time.time() - tree_data_start:.4f}s")
-
-            # 3. UI Bauen (schnell)
-            ui_build_start = time.time()
-            self.build_ui_tabs()
-            logging.debug(f"UI-Tabs gebaut in {time.time() - ui_build_start:.4f}s")
             
-            # 4. UI freigeben (Lade-Balken weg)
-            self.query_one("#loading_container").remove()
-            tabs = self.query_one(TabbedContent)
-            tabs.disabled = False
-            tabs.focus()
-            logging.info(f"UI-Start (Phase 1) abgeschlossen in {time.time() - start_time:.4f}s. App ist bedienbar.")
-
-            # 5. Langsames Laden (Logs, UI-Updates) verzögert starten
-            #    Dies stellt sicher, dass die UI (Bäume) vollständig gemountet ist, bevor wir sie füllen.
-            self.notify("Projekt geladen. Lade Logs im Hintergrund...")
-            self.call_later(self.load_logs_and_finish_ui)
-            
-        except Exception as e:
-            self.show_startup_error(e, traceback.format_exc())
-    
-    def load_logs_and_finish_ui(self) -> None:
-        """
-        [SYNCHRON, nach UI-Start]
-        Friert die UI ein, um Logs zu laden und UI-Labels/Tabelle zu füllen.
-        Wird von on_mount() via call_later() aufgerufen.
-        """
-        logging.debug("load_logs_and_finish_ui: Starte Phase 2 (Log-Laden)...")
-        start_time = time.time()
-        
-        try:
-            # 1. Logs laden (langsam, 3-6s)
+            # 3. Logs laden (langsam, 3-6s)
             log_load_start = time.time()
             self._load_log_file_data_only()
             logging.debug(f"Log-Daten geladen in {time.time() - log_load_start:.4f}s")
 
-            # 2. Bäume popolieren (jetzt sicher)
+            # 4. UI Bauen (schnell)
+            ui_build_start = time.time()
+            self.build_ui_tabs()
+            logging.debug(f"UI-Tabs gebaut in {time.time() - ui_build_start:.4f}s")
+
+            # 5. Bäume popolieren (schnell)
             populate_start = time.time()
             self._populate_tree_from_data(self.query_one("#building_tree", Tree), self.building_tree_data)
             self._populate_tree_from_data(self.query_one("#pa_tree", Tree), self.pa_tree_data)
             self._populate_tree_from_data(self.query_one("#ga_tree", Tree), self.ga_tree_data) 
             logging.debug(f"Bäume popoliert in {time.time() - populate_start:.4f}s")
-
-            # 3. Baum-Labels aktualisieren (langsam, 1-2s)
+            
+            # 6. Baum-Labels aktualisieren (langsam, 1-2s)
             labels_start = time.time()
             logging.debug("Aktualisiere Baum-Labels...")
             for tree in self.query(Tree):
@@ -174,7 +157,7 @@ class KNXLens(App):
                 self._update_tree_labels_recursively(tree.root)
             logging.debug(f"Baum-Labels aktualisiert in {time.time() - labels_start:.4f}s")
 
-            # 4. Initiale Log-Ansicht rendern (langsam, 0.5s)
+            # 7. Initiale Log-Ansicht rendern (langsam, 0.5s)
             render_start = time.time()
             logging.debug("Starte _process_log_lines (initiale Log-Ansicht)...")
             self.log_view_is_dirty = True
@@ -182,16 +165,21 @@ class KNXLens(App):
             self.log_view_is_dirty = False 
             logging.debug(f"_process_log_lines beendet in {time.time() - render_start:.4f}s")
 
-            # 5. Auto-Reload starten
+            # 8. Auto-Reload starten
             if not (self.config.get("log_file") or "").lower().endswith(".zip"):
                  self.action_toggle_log_reload(force_on=True)
+
+            # 9. UI freigeben
+            self.query_one("#loading_container").remove()
+            tabs = self.query_one(TabbedContent)
+            tabs.disabled = False
+            tabs.focus()
             
-            logging.info(f"Phase 2 (Log-Laden & UI-Finish) abgeschlossen in {time.time() - start_time:.4f}s")
-
+            logging.info(f"Synchroner Start abgeschlossen in {time.time() - start_time:.4f}s")
+            
         except Exception as e:
-            logging.error(f"Fehler in Phase 2 (load_logs_and_finish_ui): {e}", exc_info=True)
-            self.notify(f"Fehler beim Laden der Log-Datei: {e}", severity="error")
-
+            self.show_startup_error(e, traceback.format_exc())
+    
     def build_ui_tabs(self) -> None:
         """
         [SYNCHRON]
@@ -245,7 +233,7 @@ class KNXLens(App):
         tabs.add_pane(TabPane("Log-Ansicht", log_view_container, id="log_pane"))
         tabs.add_pane(TabPane("Dateien", file_browser_container, id="files_pane"))
         logging.debug("build_ui_tabs: UI-Tabs erstellt.")
-    # --- ENDE START-LOGIK ---
+    # --- ENDE SYNCHRONER START ---
 
     def _reset_user_activity(self) -> None:
         """Setzt den Timer für Inaktivität zurück und startet ggf. den Reload-Timer neu."""
@@ -402,25 +390,23 @@ class KNXLens(App):
             filter_duration = time.time() - filter_start_time
             logging.debug(f"Filter-Loop beendet in {filter_duration:.4f}s. {found_count} Zeilen gefunden.")
 
-            # --- PAGING-LOGIK (Limit GILT IMMER) ---
-            if found_count > MAX_LOG_LINES_NO_FILTER:
-                truncated_count = found_count - MAX_LOG_LINES_NO_FILTER
-                caption_text = f" | Zeige letzte {MAX_LOG_LINES_NO_FILTER} von {found_count} Treffern"
+            # --- PAGING-LOGIK (Limit GILT IMMER, nutzt self.max_log_lines) ---
+            if found_count > self.max_log_lines:
+                truncated_count = found_count - self.max_log_lines
+                caption_text = f" | Zeige letzte {self.max_log_lines} von {found_count} Treffern"
                 log_caption += caption_text
-                logging.warning(f"Zu viele Zeilen ({found_count}). Zeige nur die letzten {MAX_LOG_LINES_NO_FILTER}.")
+                logging.warning(f"Zu viele Zeilen ({found_count}). Zeige nur die letzten {self.max_log_lines}.")
                 
-                rows_to_add = rows_to_add[-MAX_LOG_LINES_NO_FILTER:]
+                rows_to_add = rows_to_add[-self.max_log_lines:]
                 
-                # --- POPUP-SPAM-FIX ---
                 if not self.paging_warning_shown:
                     self.notify(
-                        f"Anzeige auf {MAX_LOG_LINES_NO_FILTER} Zeilen begrenzt ({truncated_count} ältere ausgeblendet).",
+                        f"Anzeige auf {self.max_log_lines} Zeilen begrenzt ({truncated_count} ältere ausgeblendet).",
                         title="Filter-Limit",
                         severity="warning",
                         timeout=10
                     )
-                    self.paging_warning_shown = True # Flag setzen
-                # --- ENDE POPUP-FIX ---
+                    self.paging_warning_shown = True 
                 
             elif not has_selection and not has_regex_filter:
                 log_caption = f"Alle Einträge ({found_count})"
@@ -706,7 +692,7 @@ class KNXLens(App):
             
             # Spezialfall: Root-Knoten (wie "Gebäude") hat keine GAs,
             # aber wir wollen trotzdem alle Kinder auswählen.
-            if not descendant_gas and not node.parent:
+            if not descendant_gas and (not node.parent or node.parent.id == "#tree-root"):
                 # Hole GAs von Kindern, wenn Root geklickt wird
                 for child in node.children:
                     descendant_gas.update(self._get_descendant_gas(child))
@@ -785,8 +771,8 @@ class KNXLens(App):
     def action_toggle_log_reload(self, force_on: bool = False, force_off: bool = False) -> None:
         """Schaltet den Auto-Reload-Timer um (oder erzwingt ihn)."""
         
-        # --- 5-Sekunden-Timer ---
-        TIMER_INTERVAL = 5.0 
+        # --- Nutzt jetzt self.reload_interval ---
+        TIMER_INTERVAL = self.reload_interval 
         
         if force_off:
             if self.log_reload_timer:
@@ -901,8 +887,8 @@ class KNXLens(App):
             total_rows = self.log_widget.row_count + len(rows_to_add)
             
             # Nur neu laden, wenn KEIN Filter aktiv ist UND wir das Limit überschreiten
-            if not has_selection and not has_regex_filter and total_rows > MAX_LOG_LINES_NO_FILTER:
-                logging.info(f"Tailing (ohne Filter) überschreitet Anzeigelimit ({total_rows} > {MAX_LOG_LINES_NO_FILTER}). Lade Ansicht neu...")
+            if not has_selection and not has_regex_filter and total_rows > self.max_log_lines:
+                logging.info(f"Tailing (ohne Filter) überschreitet Anzeigelimit ({total_rows} > {self.max_log_lines}). Lade Ansicht neu...")
                 self.log_view_is_dirty = True
                 self._refilter_log_view() # Baut die Tabelle mit den letzten 10k neu auf
             else:
@@ -1107,7 +1093,12 @@ def main():
             'knxproj_path': args.path or os.getenv('KNX_PROJECT_PATH'),
             'log_file': args.log_file or os.getenv('LOG_FILE'),
             'password': args.password or os.getenv('KNX_PASSWORD'),
-            'log_path': os.getenv('LOG_PATH')
+            'log_path': os.getenv('LOG_PATH'),
+            
+            # --- NEU: ENV-Variablen werden hier geladen ---
+            'max_log_lines': os.getenv('MAX_LOG_LINES', '10000'),
+            'reload_interval': os.getenv('RELOAD_INTERVAL', '5.0')
+            # --- ENDE NEU ---
         }
 
         if not config['knxproj_path']:
