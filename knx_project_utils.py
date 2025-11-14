@@ -33,24 +33,52 @@ def load_or_parse_project(knxproj_path: str, password: Optional[str]) -> Dict:
         raise FileNotFoundError(f"Projektdatei nicht gefunden unter '{knxproj_path}'")
     
     cache_path = knxproj_path + ".cache.json"
+    
+    # --- DEBUG-LOGGING HINZUGEFÜGT ---
+    logging.debug(f"Prüfe Projekt-Cache für: {knxproj_path}")
+    
     if os.path.exists(cache_path):
+        logging.debug(f"Cache-Datei gefunden: {cache_path}")
         with open(cache_path, 'r', encoding='utf-8') as f:
             try:
-                cache_data = json.load(f)
+                # 1. MD5-Hash der Projektdatei berechnen (kann dauern)
+                md5_start_time = time.time()
                 current_md5 = get_md5_hash(knxproj_path)
+                md5_duration = time.time() - md5_start_time
+                logging.debug(f"MD5-Hash der Projektdatei berechnet in {md5_duration:.4f}s.")
+                
+                # 2. Cache-JSON laden (kann dauern)
+                json_load_start_time = time.time()
+                cache_data = json.load(f)
+                json_load_duration = time.time() - json_load_start_time
+                logging.debug(f"Cache-JSON-Datei geladen in {json_load_duration:.4f}s.")
+                
                 if cache_data.get("md5") == current_md5:
                     logging.info("Cache ist aktuell. Lade aus dem Cache...")
                     duration = time.time() - start_time
                     logging.info(f"Projekt '{os.path.basename(knxproj_path)}' in {duration:.2f}s aus dem Cache geladen.")
                     return cache_data["project"]
+                else:
+                    logging.info("Cache-MD5 stimmt nicht überein. Parse Projekt neu...")
+                    
             except (json.JSONDecodeError, KeyError):
                 logging.warning("Cache ist korrupt. Parse Projekt neu...")
+    else:
+        logging.debug(f"Keine Cache-Datei unter {cache_path} gefunden. Parse Projekt neu.")
+    # --- ENDE DEBUG-LOGGING ---
     
     logging.info(f"Parse KNX-Projektdatei: {knxproj_path} (dies kann einen Moment dauern)...")
+    parse_start_time = time.time()
     xknxproj = XKNXProj(knxproj_path, password=password)
     project_data = xknxproj.parse()
+    parse_duration = time.time() - parse_start_time
+    logging.info(f"Projekt-Parsing abgeschlossen in {parse_duration:.2f}s.")
 
+    md5_start_time = time.time()
     current_md5 = get_md5_hash(knxproj_path)
+    md5_duration = time.time() - md5_start_time
+    logging.debug(f"MD5-Hash für neuen Cache berechnet in {md5_duration:.4f}s.")
+
     new_cache_data = {"md5": current_md5, "project": project_data}
     logging.info(f"Speichere neuen Cache nach {cache_path}")
     with open(cache_path, 'w', encoding='utf-8') as f:

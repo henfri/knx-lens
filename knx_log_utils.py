@@ -82,15 +82,28 @@ def _parse_lines_internal(
                         logging.debug(f"Konnte Timestamp für Zeitfilter nicht parsen: {timestamp}")
                         continue
 
+                payload_str = payload if payload is not None else "N/A"
+                
                 if payload is not None:
                     new_payload_items.append({
                         "ga": ga,
                         "timestamp": timestamp,
-                        "payload": payload
+                        "payload": payload_str
                     })
                 
                 pa_name = devices_dict.get(pa, {}).get("name", "N/A")
                 ga_name = ga_dict.get(ga, {}).get("name", "N/A")
+                
+                # --- OPTIMIERUNG: Search-String hier vorab bauen ---
+                search_string = (
+                    f"{timestamp} "
+                    f"{pa} "
+                    f"{pa_name} "
+                    f"{ga} "
+                    f"{ga_name} "
+                    f"{payload_str}"
+                )
+                # --- ENDE OPTIMIERUNG ---
                 
                 new_cached_items.append({
                     "timestamp": timestamp,
@@ -98,7 +111,8 @@ def _parse_lines_internal(
                     "pa_name": pa_name,
                     "ga": ga,
                     "ga_name": ga_name,
-                    "payload": payload if payload is not None else "N/A"
+                    "payload": payload_str,
+                    "search_string": search_string # <-- NEU HINZUGEFÜGT
                 })
 
         except (IndexError, StopIteration, csv.Error) as e:
@@ -163,6 +177,7 @@ def append_new_log_lines(
     if not log_format:
         if cached_log_data:
             first_entry = cached_log_data[0]
+            # Holen des search_string nicht möglich, da Payload fehlt
             simulated_line = f"{first_entry['timestamp']} | {first_entry['pa']} | | {first_entry['ga']} | | {first_entry['payload']}"
             log_format = detect_log_format([simulated_line])
     if not log_format:
