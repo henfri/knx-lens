@@ -81,7 +81,6 @@ The tools require Python 3.10 or higher. Linux and Windows are tested.
     ```
 
 3.  **Install Dependencies**:
-    Install dependencies using pip:
     ```
     pip install -r requirements.txt
     ```
@@ -170,21 +169,26 @@ python knx-lens.py
 ```
 **Explorer Controls:**
 
-| Key      | Action             | Description                                                                  |
-|----------|--------------------|------------------------------------------------------------------------------|
-| ↑ / ↓    | Navigate           | Moves the cursor up or down in the tree.                                     |
-| Enter    | Expand/Collapse    | Expands or collapses the selected node in the tree.                          |
-| Tab      | Switch view        | Switches between the tabs (Building, Lines, Functions, Log).                 |
-| a        | Toggle selection   | Selects (or deselects) the current node and all its children for the log filter. |
-| c        | Copy               | Copies the clean name of the current node to the clipboard.                  |
-| d        | Display Mode       | Toggles the display mode of received data.                                   |
-| f        | Filter tree        | Opens an input field to filter the current tree view.                        |
-| i        | Time Filter        | Filters for a certain time-range (improves performance)                      |
-| o        | Open log file      | Opens a dialog to load a new log file.                                       |
-| r        | Reload log         | Manually reloads the current log file to show changes.                       |
-| t        | Toggle auto-reload | Toggles the automatic reloading of the log file on or off.                   |
-| Escape   | Reset filter       | Removes the current filter and shows the full tree again.                    |
-| q        | Quit               | Closes the application.                                                      |
+| Key | Action | Description |
+|---|---|---|
+| `q` | `Quit` | Closes the application. |
+| `↑`/`↓`/`Enter` | Navigate Tree | Navigate and expand/collapse nodes. |
+| `Tab` | Switch Tab | Switches between the main tabs. |
+| `a` | `Toggle Selection` | Selects (or deselects) the current node for the log filter. |
+| `c` | `Clear Selection` | Clears the entire log filter selection (all `[*]`). |
+| `s` | `Save Selection` | Saves the current selection (`[*]`) as a new "Selection Group". |
+| `f` | `Filter Tree` | Opens an input to filter (search) the current tree view. |
+| `Escape` | `Reset Filter` | Clears the tree filter/search ('f') and shows the full tree. |
+| `r` | `Reload Log` | Manually reloads the log file from disk. |
+| `t` | `Toggle Auto-Reload`| Toggles automatic reloading of the log file. |
+| `i` | `Time Filter` | Sets a start/end time to filter the log view. |
+| `l` | `Reload Groups` | (In "Selection Groups" tab) Reloads the `named_filters.yaml` file. |
+| `d` | `Delete Item` | (In "Selection Groups" tab) Deletes the selected group or rule. |
+| `n` | `New Rule` | (In "Selection Groups" tab) Adds a new rule to the selected group. |
+| `e` | `Edit Rule` | (In "Selection Groups" tab) Edits the selected rule. |
+| `Ctrl+n` | `New Group` | (In "Selection Groups" tab) Creates a new, empty selection group. |
+| `Enter` | `Load File` | (In "Files" tab) Loads the selected log file. |
+
 
 ### Step 3: Explore Logs and Project in the Web Browser
 

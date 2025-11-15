@@ -25,7 +25,7 @@ from knx_log_utils import parse_and_cache_log_data, append_new_log_lines
 
 # --- Konstanten aus der Haupt-App ---
 NAMED_FILTER_FILENAME = "named_filters.yaml" 
-TreeData = Dict[str, Any] # <-- Hier ist der fehlende Import
+TreeData = Dict[str, Any]
 
 class KNXTuiLogic:
     """
@@ -68,7 +68,7 @@ class KNXTuiLogic:
                     if not log_files_in_zip:
                         raise FileNotFoundError("Keine .log-Datei im ZIP-Archiv gefunden.")
                     with zf.open(log_files_in_zip[0]) as log_file:
-                        lines = io.TextIOWrapper(log_file, encoding='utf-8').readlines()
+                        lines = io.TextIWrapper(log_file, encoding='utf-8').readlines()
             else:
                 with open(log_file_path, 'r', encoding='utf-8') as f:
                     lines = f.readlines()
@@ -128,7 +128,7 @@ class KNXTuiLogic:
         logging.debug("Baum-Labels aktualisiert.")
 
         logging.debug("Starte _process_log_lines (initiale Log-Ansicht)...")
-        self.paging_warning_shown = False # <-- POPUP-FLAG RESET
+        self.paging_warning_shown = False
         self.log_view_is_dirty = True
         self._process_log_lines()
         self.log_view_is_dirty = False 
@@ -153,21 +153,22 @@ class KNXTuiLogic:
         und füllt die `DataTable`.
         """
         if not self.log_widget: return
+        # --- HIER IST DIE KORREKTUR FÜR DIE CAPTION ---
+        if not self.log_caption_label: return
         
         try:
             is_at_bottom = self.log_widget.scroll_y >= self.log_widget.max_scroll_y
             
             self.log_widget.clear()
-            # --- NEUE FILTER-LOGIK ---
             has_ga_filter = bool(self.selected_gas)
             has_named_regex_filter = bool(self.active_named_regex_rules)
             has_global_regex_filter = bool(self.regex_filter)
             has_any_or_filter = has_ga_filter or has_named_regex_filter
-            # ---
     
             if not self.cached_log_data:
-                 self.log_widget.add_row("[yellow]Keine Log-Daten geladen oder Log-Datei ist leer.[/yellow]")
-                 self.log_widget.caption = "Keine Log-Daten"
+                 self.log_widget.add_row("[yellow]No log data loaded or log file is empty.[/yellow]")
+                 # --- HIER GEÄNDERT ---
+                 self.log_caption_label.update("No log data")
                  return
             
             start_time = time.time()
@@ -175,9 +176,9 @@ class KNXTuiLogic:
             log_entries_to_process = self.cached_log_data 
             
             if has_ga_filter:
-                log_caption += f"GA-Filter ({len(self.selected_gas)})"
+                log_caption += f"GA Filter ({len(self.selected_gas)})"
             if has_named_regex_filter:
-                log_caption += f" | Regex-Filter ({len(self.active_named_regex_rules)})"
+                log_caption += f" | Regex Filter ({len(self.active_named_regex_rules)})"
             if has_global_regex_filter:
                 log_caption += f" | AND Grep ('{self.regex_filter_string}')"
 
@@ -189,29 +190,26 @@ class KNXTuiLogic:
             
             for i, log_entry in enumerate(log_entries_to_process):
                 
-                # --- NEUE FILTER-LOGIK (NAMED FILTERS) ---
-                show_line = not has_any_or_filter # Wenn kein OR-Filter aktiv ist, erstmal alle zeigen
+                show_line = not has_any_or_filter
                 
                 # 1. OR-Pool (GAs ODER Named Regexes)
                 if has_any_or_filter:
                     if has_ga_filter and log_entry["ga"] in self.selected_gas:
                         show_line = True
-                    elif has_named_regex_filter and not show_line: # Nur prüfen, wenn nicht schon durch GA-Match
+                    elif has_named_regex_filter and not show_line:
                         for rule in self.active_named_regex_rules:
                             if rule.search(log_entry["search_string"]):
                                 show_line = True
                                 break
                 
                 if not show_line:
-                    continue # Weder GA noch Named Regex haben gematcht
+                    continue
                 
                 # 2. Globaler AND-Pool (Der 'grep'-Input)
                 if has_global_regex_filter:
                     if not self.regex_filter.search(log_entry["search_string"]):
-                        continue # Hat OR-Pool gematcht, aber nicht den globalen AND-Regex
-                # --- ENDE NEUE LOGIK ---
-
-                # Zeile hat alle Filter bestanden
+                        continue
+                
                 rows_to_add.append((
                     log_entry["timestamp"],
                     log_entry["pa"],
@@ -226,10 +224,9 @@ class KNXTuiLogic:
             filter_duration = time.time() - filter_start_time
             logging.debug(f"Filter-Loop beendet in {filter_duration:.4f}s. {found_count} Zeilen gefunden.")
 
-            # --- PAGING-LOGIK (Limit GILT IMMER, nutzt self.max_log_lines) ---
             if found_count > self.max_log_lines:
                 truncated_count = found_count - self.max_log_lines
-                caption_text = f" | Zeige letzte {self.max_log_lines} von {found_count} Treffern"
+                caption_text = f" | Showing last {self.max_log_lines} of {found_count} matches"
                 log_caption += caption_text
                 logging.warning(f"Zu viele Zeilen ({found_count}). Zeige nur die letzten {self.max_log_lines}.")
                 
@@ -237,16 +234,15 @@ class KNXTuiLogic:
                 
                 if not self.paging_warning_shown:
                     self.notify(
-                        f"Anzeige auf {self.max_log_lines} Zeilen begrenzt ({truncated_count} ältere ausgeblendet).",
-                        title="Filter-Limit",
+                        f"Display limited to {self.max_log_lines} lines ({truncated_count} older entries hidden).",
+                        title="Filter Limit",
                         severity="warning",
                         timeout=10
                     )
                     self.paging_warning_shown = True 
                 
             elif not has_any_or_filter and not has_global_regex_filter:
-                log_caption = f"Alle Einträge ({found_count})"
-            # --- ENDE PAGING-LOGIK ---
+                log_caption = f"All entries ({found_count})"
 
             logging.debug(f"Starte log_widget.add_rows({len(rows_to_add)} Zeilen)...")
             add_rows_start_time = time.time()
@@ -258,7 +254,10 @@ class KNXTuiLogic:
 
             duration = time.time() - start_time
             logging.info(f"Log-Ansicht gefiltert. {len(rows_to_add)} Einträge in {duration:.4f}s gerendert.")
-            self.log_widget.caption = f"{len(rows_to_add)} Einträge angezeigt. ({duration:.2f}s) | {log_caption}"
+            
+            # --- HIER GEÄNDERT ---
+            caption_str = f"{len(rows_to_add)} entries shown. ({duration:.2f}s) | {log_caption}"
+            self.log_caption_label.update(caption_str)
 
             if is_at_bottom:
                 self.log_widget.scroll_end(animate=False, duration=0.0)
@@ -267,7 +266,7 @@ class KNXTuiLogic:
             logging.error(f"Schwerer Fehler in _process_log_lines: {e}", exc_info=True)
             if self.log_widget:
                 self.log_widget.clear()
-                self.log_widget.add_row(f"[red]Fehler beim Verarbeiten der Log-Zeilen: {e}[/red]")
+                self.log_widget.add_row(f"[red]Error processing log lines: {e}[/red]")
 
     def _efficient_log_tail(self) -> None:
         """
@@ -278,7 +277,7 @@ class KNXTuiLogic:
         
         idle_duration = time.time() - self.last_user_activity
         if idle_duration > 3600:
-            self.notify("Log Auto-Reload wegen Inaktivität pausiert.", title="Log Ansicht")
+            self.notify("Log Auto-Reload paused due to inactivity.", title="Log View")
             logging.info("Auto-Reload wegen Inaktivität (1h) pausiert.")
             self.action_toggle_log_reload(force_off=True) 
             return 
@@ -321,12 +320,10 @@ class KNXTuiLogic:
 
             logging.debug(f"{len(new_cached_items)} neue Zeilen verarbeitet. Aktualisiere Tabelle...")
 
-            # --- NEUE FILTER-LOGIK ---
             has_ga_filter = bool(self.selected_gas)
             has_named_regex_filter = bool(self.active_named_regex_rules)
             has_global_regex_filter = bool(self.regex_filter)
             has_any_or_filter = has_ga_filter or has_named_regex_filter
-            # ---
             rows_to_add = []
 
             logging.debug(f"Filtere {len(new_cached_items)} neue Zeilen (OR-Filter: {has_any_or_filter}, AND-Filter: {has_global_regex_filter})...")
@@ -362,7 +359,6 @@ class KNXTuiLogic:
 
             is_at_bottom = self.log_widget.scroll_y >= self.log_widget.max_scroll_y
             
-            # --- POPUP-SPAM-FIX: Check enthält jetzt Filter-Status ---
             total_rows = self.log_widget.row_count + len(rows_to_add)
             
             if not has_any_or_filter and not has_global_regex_filter and total_rows > self.max_log_lines:
@@ -374,14 +370,13 @@ class KNXTuiLogic:
                 self.log_widget.add_rows(rows_to_add)
                 if is_at_bottom:
                     self.log_widget.scroll_end(animate=False, duration=0.0)
-            # --- ENDE POPUP-FIX ---
             
         except FileNotFoundError:
-            self.notify(f"Log-Datei '{log_file_path}' nicht mehr gefunden.", severity="error")
+            self.notify(f"Log file '{log_file_path}' not found.", severity="error")
             self.action_toggle_log_reload(force_off=True)
         except Exception as e:
             logging.error(f"Fehler im efficient_log_tail: {e}", exc_info=True)
-            self.notify(f"Fehler beim Log-Reload: {e}", severity="error")
+            self.notify(f"Error during log reload: {e}", severity="error")
             self.action_toggle_log_reload(force_off=True)
 
     def _refilter_log_view(self) -> None:
@@ -389,7 +384,7 @@ class KNXTuiLogic:
         if not self.log_widget: return
         logging.info("Log-Ansicht wird mit gecachten Daten neu gefiltert (synchron).")
         self._process_log_lines()
-        self.log_view_is_dirty = False # Flag löschen nach dem Filtern
+        self.log_view_is_dirty = False
     
     # --- BAUM-LOGIK (TREES) ---
     
@@ -426,7 +421,6 @@ class KNXTuiLogic:
 
     def _update_parent_prefixes_recursive(self, node: Optional[TreeNode]) -> None:
         """
-        [PERFORMANCE-FIX - UP]
         Aktualisiert rekursiv alle Eltern-Knoten (für [-] Status).
         """
         if not node or not node.parent: # Stop an der (sichtbaren) Wurzel
@@ -454,7 +448,6 @@ class KNXTuiLogic:
 
     def _update_node_and_children_prefixes(self, node: TreeNode) -> None:
         """
-        [PERFORMANCE-FIX - DOWN]
         Aktualisiert rekursiv den Knoten selbst und alle Kinder.
         """
         display_label = ""
@@ -556,7 +549,8 @@ class KNXTuiLogic:
                 filtered_child_data, child_has_match = self._filter_tree_data(child_data, filter_text)
                 if child_has_match and filtered_child_data:
                     has_matching_descendant = True
-                    filtered_children[key] = child_data
+                    # HIER IST DIE KORREKTUR FÜR DIE FILTERLOGIK
+                    filtered_children[key] = filtered_child_data
             
             if has_matching_descendant:
                 new_node_data = original_data.copy()
@@ -608,7 +602,6 @@ class KNXTuiLogic:
 
     def _save_named_filters(self):
         """
-        [WUNSCH 3]
         Speichert self.named_filters (die Roh-Strings) in die YAML-Datei,
         inklusive GA-Namen als Kommentare.
         """
@@ -617,8 +610,8 @@ class KNXTuiLogic:
             
             with open(self.named_filter_path, 'w', encoding='utf-8') as f:
                 # Schreibe Header
-                f.write("# KNX-Lens Benannte Filter\n")
-                f.write("# Format: Jede Zeile ist eine GA (z.B. 1/1/1) oder ein Regex (z.B. .*Licht.*)\n\n")
+                f.write("# KNX-Lens Named Selection Groups\n")
+                f.write("# Format: Each line is a GA (e.g. 1/1/1) or a Regex (e.g. .*Light.*)\n\n")
                 
                 for filter_name, rules_list in self.named_filters.items():
                     f.write(f"{filter_name}:\n")
@@ -643,15 +636,21 @@ class KNXTuiLogic:
 
     def _populate_named_filter_tree(self):
         """
-        [WUNSCH 1]
         Füllt den Baum der Filter-Gruppen, inklusive der Regeln als Kinder.
         """
         tree = self.query_one("#named_filter_tree", Tree)
         tree.clear()
+        
+        # Daten für die spätere Filterung ('f') speichern
+        tree_data_root = {"id": "filter_root", "name": "Selection Groups", "children": {}}
+        
         for filter_name in sorted(self.named_filters.keys()):
             prefix = "[*] " if filter_name in self.active_named_filters else "[ ] "
             # Füge den Filter-Namen als Eltern-Knoten hinzu
             parent_node = tree.root.add(prefix + filter_name, data=filter_name)
+            
+            # Daten für Filterung vorbereiten
+            parent_data_node = {"id": f"filter_group_{filter_name}", "name": filter_name, "data": filter_name, "children": {}}
             
             # Füge die Regeln als Kind-Knoten hinzu
             rules_list = self.named_filters.get(filter_name)
@@ -659,7 +658,16 @@ class KNXTuiLogic:
                 for rule_str in rules_list:
                     # Data-Format: (FilterName, RegelString)
                     parent_node.add_leaf(rule_str, data=(filter_name, rule_str))
+                    # Daten für Filterung
+                    leaf_data = (filter_name, rule_str)
+                    parent_data_node["children"][rule_str] = {"id": f"rule_{filter_name}_{rule_str}", "name": rule_str, "data": leaf_data, "children": {}}
+
+            tree_data_root["children"][filter_name] = parent_data_node
+
         tree.root.expand()
+        # Speichere die gebauten Daten für die Baumfilter-Aktion ('f')
+        self.named_filters_tree_data = tree_data_root
+
 
     def _rebuild_active_regexes(self):
         """Baut den Pool der aktiven Regex-Regeln neu auf."""
@@ -672,8 +680,6 @@ class KNXTuiLogic:
         """Aktualisiert alle Bäume, um den [*] Status zu synchronisieren."""
         logging.debug("Aktualisiere alle Baum-Präfixe...")
         
-        # --- BUGFIX (WUNSCH 2) ---
-        # Rief fälschlicherweise _update_parent_prefixes_recursive auf
         for tree_id in ("#building_tree", "#pa_tree", "#ga_tree"):
             try:
                 tree = self.query_one(tree_id, Tree)
@@ -681,7 +687,6 @@ class KNXTuiLogic:
                 self._update_node_and_children_prefixes(tree.root)
             except Exception as e:
                 logging.warning(f"Konnte Präfixe für Baum {tree_id} nicht aktualisieren: {e}")
-        # --- ENDE BUGFIX ---
         
         # Schnelles Update für Named-Filter-Baum
         self._update_named_filter_prefixes()
@@ -692,8 +697,11 @@ class KNXTuiLogic:
         try:
             tree = self.query_one("#named_filter_tree", Tree)
             for node in tree.root.children:
+                if not isinstance(node.data, str): continue # Nur Elternknoten
                 filter_name = node.data
                 prefix = "[*] " if filter_name in self.active_named_filters else "[ ] "
-                node.set_label(prefix + filter_name)
+                
+                display_label = re.sub(r"^(\[[ *\-]] )+", "", str(node.label))
+                node.set_label(prefix + display_label)
         except Exception as e:
             logging.debug(f"Fehler beim Update der Named-Filter-Präfixe: {e}")

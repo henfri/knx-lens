@@ -34,7 +34,6 @@ def load_or_parse_project(knxproj_path: str, password: Optional[str]) -> Dict:
     
     cache_path = knxproj_path + ".cache.json"
     
-    # --- DEBUG-LOGGING HINZUGEFÜGT ---
     logging.debug(f"Prüfe Projekt-Cache für: {knxproj_path}")
     
     if os.path.exists(cache_path):
@@ -65,7 +64,6 @@ def load_or_parse_project(knxproj_path: str, password: Optional[str]) -> Dict:
                 logging.warning("Cache ist korrupt. Parse Projekt neu...")
     else:
         logging.debug(f"Keine Cache-Datei unter {cache_path} gefunden. Parse Projekt neu.")
-    # --- ENDE DEBUG-LOGGING ---
     
     logging.info(f"Parse KNX-Projektdatei: {knxproj_path} (dies kann einen Moment dauern)...")
     parse_start_time = time.time()
@@ -115,7 +113,7 @@ def _get_smart_name(data_dict: Dict, fallback: str) -> str:
 
 def get_best_channel_name(channel: Dict, ch_id: str) -> str:
     """Ermittelt den besten Namen für einen Kanal."""
-    return _get_smart_name(channel, f"Kanal-{ch_id}")
+    return _get_smart_name(channel, f"Channel-{ch_id}")
 
 def add_com_objects_to_node(parent_node: Dict, com_obj_ids: List[str], project_data: Dict):
     """Fügt Communication Objects als Kinder zu einem Knoten hinzu."""
@@ -123,9 +121,7 @@ def add_com_objects_to_node(parent_node: Dict, com_obj_ids: List[str], project_d
     for co_id in com_obj_ids:
         co = comm_objects.get(co_id)
         if co:
-            # --- KORREKTUR: Hier nutzen wir jetzt auch die intelligente Namensfindung ---
             co_name = _get_smart_name(co, f"CO-{co_id}")
-            # --- ENDE KORREKTUR ---
             
             gas = co.get("group_address_links", [])
             gas_str = ", ".join([str(g) for g in gas])
@@ -146,7 +142,7 @@ def build_ga_tree_data(project: Dict) -> TreeData:
     """
     group_addresses = project.get("group_addresses", {})
     group_ranges = project.get("group_ranges", {})
-    root_node: TreeData = {"id": "ga_root", "name": "Funktionen", "children": {}}
+    root_node: TreeData = {"id": "ga_root", "name": "Functions", "children": {}}
     
     if not group_addresses:
         return root_node
@@ -201,14 +197,14 @@ def build_ga_tree_data(project: Dict) -> TreeData:
     sorted_main_keys = sorted(hierarchy.keys(), key=int)
     for main_key in sorted_main_keys:
         main_group = hierarchy[main_key]
-        mg_name = main_group.get('name') or f'HG {main_key}'
+        mg_name = main_group.get('name') or f'MG {main_key}'
         main_node_name = f"({main_key}) {mg_name}"
         main_node = root_node["children"].setdefault(main_key, {"id": f"ga_main_{main_key}", "name": main_node_name, "children": {}})
 
         sorted_sub_keys = sorted(main_group.get("subgroups", {}).keys(), key=lambda k: [int(p) for p in k.split('/')])
         for sub_key in sorted_sub_keys:
             sub_group = main_group["subgroups"][sub_key]
-            sg_name = sub_group.get('name') or f'MG {sub_key}'
+            sg_name = sub_group.get('name') or f'SG {sub_key}'
             sub_node_name = f"({sub_key}) {sg_name}"
             sub_node = main_node["children"].setdefault(sub_key, {"id": f"ga_sub_{sub_key.replace('/', '_')}", "name": sub_node_name, "children": {}})
 
@@ -226,7 +222,7 @@ def build_ga_tree_data(project: Dict) -> TreeData:
     return root_node
 
 def build_pa_tree_data(project: Dict) -> TreeData:
-    pa_tree = {"id": "pa_root", "name": "Physikalische Adressen", "children": {}}
+    pa_tree = {"id": "pa_root", "name": "Physical Addresses", "children": {}}
     devices = project.get("devices", {})
     topology = project.get("topology", {})
     
@@ -247,11 +243,11 @@ def build_pa_tree_data(project: Dict) -> TreeData:
         line_id = f"{area_id}.{line_id_part}"
 
         area_name = area_names.get(area_id)
-        area_label = f"({area_id}) {area_name}" if area_name and area_name != f"Bereich {area_id}" else f"Bereich {area_id}"
+        area_label = f"({area_id}) {area_name}" if area_name and area_name != f"Area {area_id}" else f"Area {area_id}"
         area_node = pa_tree["children"].setdefault(area_id, {"id": f"pa_{area_id}", "name": area_label, "children": {}})
 
         line_name = line_names.get(line_id)
-        line_label = f"({line_id}) {line_name}" if line_name and line_name != f"Linie {line_id}" else f"Linie {line_id}"
+        line_label = f"({line_id}) {line_name}" if line_name and line_name != f"Line {line_id}" else f"Line {line_id}"
         line_node = area_node["children"].setdefault(line_id_part, {"id": f"pa_{line_id}", "name": line_label, "children": {}})
 
         dev_name = device.get('name') or 'N/A'
@@ -275,12 +271,12 @@ def build_pa_tree_data(project: Dict) -> TreeData:
     return pa_tree
 
 def build_building_tree_data(project: Dict) -> TreeData:
-    building_tree = {"id": "bldg_root", "name": "Gebäudestruktur", "children": {}}
+    building_tree = {"id": "bldg_root", "name": "Building Structure", "children": {}}
     locations = project.get("locations", {})
     devices = project.get("devices", {})
     
     def process_space(space: Dict, parent_node: Dict):
-        space_name = space.get("name") or "Unbenannter Bereich"
+        space_name = space.get("name") or "Unnamed Area"
         space_id = space.get('identifier', space_name)
         space_node = parent_node["children"].setdefault(space_name, {"id": f"loc_{space_id}", "name": space_name, "children": {}})
         
@@ -288,7 +284,7 @@ def build_building_tree_data(project: Dict) -> TreeData:
             device = devices.get(pa)
             if not device: continue
             
-            dev_name = device.get('name') or 'Unbenannt'
+            dev_name = device.get('name') or 'Unnamed'
             device_name = f"({pa}) {dev_name}"
             device_node = space_node["children"].setdefault(device_name, {"id": f"dev_{pa}", "name": device_name, "children": {}})
             

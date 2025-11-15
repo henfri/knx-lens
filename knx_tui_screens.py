@@ -5,7 +5,7 @@
 TUI-Bildschirme und Widgets für KNX-Lens.
 """
 
-import logging # <-- WICHTIG
+import logging
 from typing import Tuple, Optional, Iterable
 from pathlib import Path
 from textual.app import ComposeResult
@@ -14,12 +14,10 @@ from textual.widgets import Label, Input, Button, DirectoryTree
 from textual.containers import Vertical, Center, Horizontal
 from textual import events
 
-# --- DEBUG: Gefilterter Dateibaum mit Logging ---
 class FilteredDirectoryTree(DirectoryTree):
     """Ein Dateibaum, der nur relevante Dateien (.log, .zip, .txt, .knxproj) anzeigt."""
     
     def filter_paths(self, paths: Iterable[Path]) -> Iterable[Path]:
-        # Iterator in Liste umwandeln, damit wir loggen können
         path_list = list(paths)
         
         filtered = [
@@ -28,10 +26,8 @@ class FilteredDirectoryTree(DirectoryTree):
                path.name.lower().endswith((".log", ".zip", ".txt", ".knxproj"))
         ]
         
-        # Nur loggen, wenn wir tatsächlich Dateien filtern (verhindert Spam bei leerem Verzeichnis)
         if path_list:
             logging.debug(f"DirectoryTree Filter: {len(path_list)} Objekte gefunden, {len(filtered)} behalten.")
-            # Optional: Zeige die ersten paar behaltenen Dateien im Log
             if filtered:
                 logging.debug(f"  -> Beispiele: {[p.name for p in filtered[:3]]}")
         else:
@@ -42,34 +38,37 @@ class FilteredDirectoryTree(DirectoryTree):
 class FilterInputScreen(ModalScreen[str]):
     """Ein modaler Bildschirm für die Filtereingabe."""
     
-    # --- KORREKTUR: __init__ hinzugefügt ---
-    def __init__(self, prompt: str = "Baum filtern (Enter zum Bestätigen, ESC zum Abbrechen):"):
+    def __init__(self, prompt: str = "Filter input (Enter to confirm, ESC to cancel):", initial_value: str = ""):
         """
         Initialisiert den Screen mit einem benutzerdefinierten Prompt.
         
         Args:
             prompt: Der Text, der über dem Eingabefeld angezeigt wird.
+            initial_value: Der Text, mit dem das Input-Feld vorbefüllt wird.
         """
         super().__init__()
         self.prompt = prompt
-    # --- ENDE KORREKTUR ---
+        self.initial_value = initial_value
 
     def compose(self) -> ComposeResult:
         yield Center(Vertical(
-            # --- KORREKTUR: Hardcodierter Text durch Variable ersetzt ---
             Label(self.prompt),
-            Input(placeholder="Eingabe...", id="filter_input"),
+            Input(placeholder="Input...", id="filter_input"),
             id="filter_dialog"
         ))
         
     def on_mount(self) -> None: 
-        self.query_one("#filter_input", Input).focus()
+        input_widget = self.query_one("#filter_input", Input)
+        input_widget.focus()
+        if self.initial_value:
+            input_widget.value = self.initial_value
+            input_widget.cursor_position = len(self.initial_value)
         
     def on_input_submitted(self, event: Input.Submitted) -> None: 
         # Hack für "Ja/Nein"-Dialoge
-        if "ja/nein" in self.prompt.lower():
+        if "ja/nein" in self.prompt.lower() or "yes/no" in self.prompt.lower():
             if event.value.lower() in ["ja", "j", "yes", "y"]:
-                self.dismiss("ja")
+                self.dismiss("ja") # Callback prüft auf "ja"
             else:
                 self.dismiss("") # Alles andere ist "Nein"
         else:
@@ -89,13 +88,13 @@ class TimeFilterScreen(ModalScreen[Tuple[Optional[str], Optional[str]]]):
 
     def compose(self) -> ComposeResult:
         yield Center(Vertical(
-            Label("Log nach Zeit filtern (z.B. 10:30):"),
-            Label("Leer lassen zum Deaktivieren."),
-            Input(placeholder="Startzeit (HH:MM)", id="start_input", value=self.start_val),
-            Input(placeholder="Endzeit (HH:MM)", id="end_input", value=self.end_val),
+            Label("Filter log by time (e.g., 10:30):"),
+            Label("Leave empty to disable."),
+            Input(placeholder="Start time (HH:MM)", id="start_input", value=self.start_val),
+            Input(placeholder="End time (HH:MM)", id="end_input", value=self.end_val),
             Horizontal(
-                Button("Filtern", variant="success", id="apply_filter"),
-                Button("Abbrechen", variant="error", id="cancel"),
+                Button("Filter", variant="success", id="apply_filter"),
+                Button("Cancel", variant="error", id="cancel"),
             ),
             id="time_filter_dialog" 
         ))
