@@ -55,7 +55,9 @@ KNX-Lens is tested in Linux and Windows.
 * **Efficient Caching**: Parsing of the `.knxproj` file is cached to significantly speed up subsequent launches.
 * **Live Search/Filter**: Filter the tree views in real-time to quickly find what you're looking for.
 * **Live Values in Tree**: Latest and previous two values are displayed in tree
-
+* **Intelligent Log Filtering (Selection Groups)**: Select individual devices, rooms, or functions in the explorer (using **'a'**) to filter the log. This selection (`[*]`) can be saved as a **"Selection Group"** (using **'s'**) for quick reuse.
+* **Advanced Selection Groups**: These groups (in their own tab) can contain specific Group Addresses (e.g., `1/1/1`) and **Regex rules** (e.g., `.*Light.*` or `.*Floor 1.*`). This allows you to build powerful, combined filters.
+* **Global AND Filter**: A dedicated input field in the "Log View" tab allows you to add a global Regex filter that is applied **in addition** (AND logic) to your "Selection Group" filters.
 
 ### `knx-lens-web.py`
 
@@ -184,7 +186,7 @@ python knx-lens.py
 | `i` | `Time Filter` | Sets a start/end time to filter the log view. |
 | `l` | `Reload Groups` | (In "Selection Groups" tab) Reloads the `named_filters.yaml` file. |
 | `d` | `Delete Item` | (In "Selection Groups" tab) Deletes the selected group or rule. |
-| `n` | `New Rule` | (In "Selection Groups" tab) Adds a new rule to the selected group. |
+| `n` | `New Rule` | (In "Selection Groups" tab) Adds a new rule (GA or Regex) to the selected group. |
 | `e` | `Edit Rule` | (In "Selection Groups" tab) Edits the selected rule. |
 | `Ctrl+n` | `New Group` | (In "Selection Groups" tab) Creates a new, empty selection group. |
 | `Enter` | `Load File` | (In "Files" tab) Loads the selected log file. |
