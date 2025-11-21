@@ -11,14 +11,17 @@ import os
 import hashlib
 import time
 import logging
-import re
-from typing import Dict, List, Any, Optional, Set, Tuple
-from xknxproject import XKNXProj
+from typing import Dict, List, Any, Optional
+
+# SAFE IMPORT
+try:
+    from xknxproject import XKNXProj
+except ImportError:
+    XKNXProj = None
 
 TreeData = Dict[str, Any]
 
 def get_md5_hash(file_path: str) -> str:
-    """Berechnet den MD5-Hash einer Datei."""
     hash_md5 = hashlib.md5()
     with open(file_path, "rb") as f:
         for chunk in iter(lambda: f.read(4096), b""):
@@ -26,205 +29,185 @@ def get_md5_hash(file_path: str) -> str:
     return hash_md5.hexdigest()
 
 def load_or_parse_project(knxproj_path: str, password: Optional[str]) -> Dict:
-    """Lädt ein KNX-Projekt aus dem Cache oder parst es neu."""
-    start_time = time.time()
-    project_data = {}
+    if XKNXProj is None:
+        logging.error("xknxproject ist nicht installiert.")
+        return {}
+
     if not os.path.exists(knxproj_path):
         raise FileNotFoundError(f"Projektdatei nicht gefunden unter '{knxproj_path}'")
     
     cache_path = knxproj_path + ".cache.json"
     
-    logging.debug(f"Prüfe Projekt-Cache für: {knxproj_path}")
-    
     if os.path.exists(cache_path):
-        logging.debug(f"Cache-Datei gefunden: {cache_path}")
-        with open(cache_path, 'r', encoding='utf-8') as f:
-            try:
-                # 1. MD5-Hash der Projektdatei berechnen (kann dauern)
-                md5_start_time = time.time()
+        try:
+             with open(cache_path, 'r', encoding='utf-8') as f:
                 current_md5 = get_md5_hash(knxproj_path)
-                md5_duration = time.time() - md5_start_time
-                logging.debug(f"MD5-Hash der Projektdatei berechnet in {md5_duration:.4f}s.")
-                
-                # 2. Cache-JSON laden (kann dauern)
-                json_load_start_time = time.time()
                 cache_data = json.load(f)
-                json_load_duration = time.time() - json_load_start_time
-                logging.debug(f"Cache-JSON-Datei geladen in {json_load_duration:.4f}s.")
-                
-                if cache_data.get("md5") == current_md5:
-                    logging.info("Cache ist aktuell. Lade aus dem Cache...")
-                    duration = time.time() - start_time
-                    logging.info(f"Projekt '{os.path.basename(knxproj_path)}' in {duration:.2f}s aus dem Cache geladen.")
-                    return cache_data["project"]
-                else:
-                    logging.info("Cache-MD5 stimmt nicht überein. Parse Projekt neu...")
-                    
-            except (json.JSONDecodeError, KeyError):
-                logging.warning("Cache ist korrupt. Parse Projekt neu...")
-    else:
-        logging.debug(f"Keine Cache-Datei unter {cache_path} gefunden. Parse Projekt neu.")
+                if cache_data.get("md5") == current_md5 and "project" in cache_data:
+                    logging.info(f"Projekt aus Cache geladen.")
+                    return cache_data 
+        except Exception as e:
+            logging.warning(f"Cache-Fehler ({e}), parse neu.")
+
+    logging.info(f"Parse KNX-Projektdatei: {knxproj_path}...")
+    try:
+        xknxproj = XKNXProj(knxproj_path, password=password)
+        raw_parsed_data = xknxproj.parse()
+        
+        project_wrapper = {
+            "md5": get_md5_hash(knxproj_path),
+            "project": raw_parsed_data
+        }
+        
+        try:
+            with open(cache_path, 'w', encoding='utf-8') as f:
+                json.dump(project_wrapper, f, indent=2)
+        except Exception: pass
+
+        return project_wrapper
+    except Exception as e:
+        logging.critical(f"Fehler beim Parsen: {e}")
+        return {}
+
+def get_best_name(data: Dict, default_name: str) -> str:
+    if not isinstance(data, dict): 
+        return default_name
     
-    logging.info(f"Parse KNX-Projektdatei: {knxproj_path} (dies kann einen Moment dauern)...")
-    parse_start_time = time.time()
-    xknxproj = XKNXProj(knxproj_path, password=password)
-    project_data = xknxproj.parse()
-    parse_duration = time.time() - parse_start_time
-    logging.info(f"Projekt-Parsing abgeschlossen in {parse_duration:.2f}s.")
-
-    md5_start_time = time.time()
-    current_md5 = get_md5_hash(knxproj_path)
-    md5_duration = time.time() - md5_start_time
-    logging.debug(f"MD5-Hash für neuen Cache berechnet in {md5_duration:.4f}s.")
-
-    new_cache_data = {"md5": current_md5, "project": project_data}
-    logging.info(f"Speichere neuen Cache nach {cache_path}")
-    with open(cache_path, 'w', encoding='utf-8') as f:
-        json.dump(new_cache_data, f, indent=2)
-
-    duration = time.time() - start_time
-    logging.info(f"Projekt '{os.path.basename(knxproj_path)}' in {duration:.2f}s neu geparst und gecacht.")
-    
-    return project_data
-
-def _get_smart_name(data_dict: Dict, fallback: str) -> str:
-    """
-    Interne Hilfsfunktion: Baut einen Namen aus 'text' und 'function_text'.
-    Fallback auf 'name' oder den übergebenen Fallback-String.
-    """
     parts = []
-    
-    # 1. Priorität: Kombination aus "text" und "function_text"
-    if val := data_dict.get("text"):
+    if val := data.get("text"):
         parts.append(str(val).strip())
-    
-    if val := data_dict.get("function_text"):
+    if val := data.get("function_text"):
         parts.append(str(val).strip())
         
     if parts:
         return " - ".join(parts)
     
-    # 2. Priorität: "name" (oft kryptisch wie "LOG_KOf10O")
-    if val := data_dict.get("name"):
+    if val := data.get("name"):
         return str(val).strip()
         
-    # 3. Priorität: Fallback
-    return fallback
+    return data.get("description") or default_name
 
-def get_best_channel_name(channel: Dict, ch_id: str) -> str:
-    """Ermittelt den besten Namen für einen Kanal."""
-    return _get_smart_name(channel, f"Channel-{ch_id}")
+def get_best_channel_name(channel: Dict, channel_id: str) -> str:
+    return get_best_name(channel, f"Kanal {channel_id}")
 
-def add_com_objects_to_node(parent_node: Dict, com_obj_ids: List[str], project_data: Dict):
-    """Fügt Communication Objects als Kinder zu einem Knoten hinzu."""
-    comm_objects = project_data.get("communication_objects", {})
-    for co_id in com_obj_ids:
-        co = comm_objects.get(co_id)
-        if co:
-            co_name = _get_smart_name(co, f"CO-{co_id}")
+def add_com_objects_to_node(node: TreeData, co_ids: List[str], project_wrapper: Dict):
+    """
+    Fügt KOs hinzu. Löst NUR beim ersten GA-Link den Namen auf.
+    """
+    if not co_ids: return
+    
+    if "project" in project_wrapper: 
+        project_data = project_wrapper["project"]
+    else: 
+        project_data = project_wrapper
+
+    com_objects = project_data.get("communication_objects", {})
+    all_gas = project_data.get("group_addresses", {}) 
+    
+    for co_id in co_ids:
+        co = com_objects.get(co_id)
+        if not co: continue
+        
+        co_name = get_best_name(co, f"KO {co_id}")
+        
+        # Hole Verknüpfungen
+        ga_links_raw = co.get("group_addresses", [])
+        if not ga_links_raw:
+            ga_links_raw = co.get("group_address_links", [])
             
-            gas = co.get("group_address_links", [])
-            gas_str = ", ".join([str(g) for g in gas])
+        ga_links = []
+        if isinstance(ga_links_raw, list):
+            ga_links = [str(g) for g in ga_links_raw]
+        elif isinstance(ga_links_raw, dict):
+            ga_links = [str(g) for g in ga_links_raw.keys()]
+
+        formatted_gas = []
+        valid_ga_set = set()
+
+        # --- FIX 2: Nur erster Name ---
+        for i, ga_addr_str in enumerate(ga_links):
+            valid_ga_set.add(ga_addr_str)
             
-            co_number = co.get('number', '?')
-            co_label = f"{co_number}: {co_name} → [{gas_str}]"
-            
-            parent_node["children"][co_label] = {
-                "id": f"co_{co_id}", 
-                "name": co_label,
-                "data": {"type": "co", "gas": set(gas), "original_name": co_label}, 
-                "children": {}
-            }
+            if i == 0:
+                # Erster Eintrag: Mit Name
+                ga_obj = all_gas.get(ga_addr_str, {})
+                ga_friendly_name = get_best_name(ga_obj, "")
+                if ga_friendly_name:
+                    formatted_gas.append(f"{ga_addr_str} ({ga_friendly_name})")
+                else:
+                    formatted_gas.append(ga_addr_str)
+            else:
+                # Weitere Einträge: Nur Nummer
+                formatted_gas.append(ga_addr_str)
+        
+        if formatted_gas:
+            ga_display_str = ", ".join(formatted_gas)
+            ko_label = f"{co.get('number', '?')}: {co_name} -> [{ga_display_str}]"
+        else:
+            ko_label = f"{co.get('number', '?')}: {co_name}"
+        
+        node["children"][ko_label] = {
+            "id": co_id, 
+            "name": ko_label, 
+            "data": {"type": "co", "original_name": ko_label, "gas": valid_ga_set},
+            "children": {}
+        }
 
 def build_ga_tree_data(project: Dict) -> TreeData:
-    """
-    Baut eine hierarchische Baumstruktur von Gruppenadressen aus einem KNX-Projekt.
-    """
-    group_addresses = project.get("group_addresses", {})
-    group_ranges = project.get("group_ranges", {})
-    root_node: TreeData = {"id": "ga_root", "name": "Functions", "children": {}}
+    if "project" in project: raw_data = project["project"]
+    else: raw_data = project
+
+    group_addresses = raw_data.get("group_addresses", {})
+    group_ranges = raw_data.get("group_ranges", {})
+    root_node = {"id": "ga_root", "name": "Gruppenadressen", "children": {}}
+    hierarchy = {}
+
+    for ga_id, ga in group_addresses.items():
+        parts = ga.get("address", "").split('/')
+        if len(parts) < 1: continue
+        main_k = parts[0]
+        if main_k not in hierarchy: hierarchy[main_k] = {"name": f"HG {main_k}", "subs": {}}
+        if len(parts) > 1:
+            sub_k = parts[1]
+            if sub_k not in hierarchy[main_k]["subs"]: hierarchy[main_k]["subs"][sub_k] = {"name": f"MG {sub_k}", "gas": {}}
+            hierarchy[main_k]["subs"][sub_k]["gas"][ga_id] = ga
+
+    def flatten_ranges(ranges):
+        flat = {}
+        for k, v in ranges.items():
+            flat[k] = v
+            if "group_ranges" in v: flat.update(flatten_ranges(v["group_ranges"]))
+        return flat
     
-    if not group_addresses:
-        return root_node
-        
-    hierarchy: TreeData = {}
-
-    for address in group_addresses.keys():
-        parts = address.split('/')
-        if len(parts) == 3:
-            main_key, sub_key_part, _ = parts
-            sub_key = f"{main_key}/{sub_key_part}"
-            if main_key not in hierarchy:
-                hierarchy[main_key] = {"name": "", "subgroups": {}}
-            if sub_key not in hierarchy[main_key]["subgroups"]:
-                hierarchy[main_key]["subgroups"][sub_key] = {"name": "", "addresses": {}}
-            hierarchy[main_key]["subgroups"][sub_key]["addresses"][address] = {"name": ""}
-
-    flat_group_ranges = {}
-    def flatten_ranges(ranges_to_flatten: Dict):
-        for addr, details in ranges_to_flatten.items():
-            details_copy = details.copy()
-            nested_ranges = details_copy.pop("group_ranges", None)
-            flat_group_ranges[addr] = details_copy
-            if nested_ranges:
-                flatten_ranges(nested_ranges)
-
-    flatten_ranges(group_ranges)
-
-    for address, details in flat_group_ranges.items():
-        parts = address.split('/')
+    flat_ranges = flatten_ranges(group_ranges)
+    for addr, details in flat_ranges.items():
+        parts = addr.split('/')
         name = details.get("name")
         if not name: continue
-        if len(parts) == 1:
-            main_key = parts[0]
-            if main_key in hierarchy:
-                hierarchy[main_key]["name"] = name
-        elif len(parts) == 2:
-            main_key, _ = parts
-            if main_key in hierarchy and address in hierarchy[main_key].get("subgroups", {}):
-                hierarchy[main_key]["subgroups"][address]["name"] = name
+        if len(parts) == 1 and parts[0] in hierarchy: hierarchy[parts[0]]["name"] = name
+        elif len(parts) == 2 and parts[0] in hierarchy and parts[1] in hierarchy[parts[0]]["subs"]:
+            hierarchy[parts[0]]["subs"][parts[1]]["name"] = name
 
-    for address, details in group_addresses.items():
-        parts = address.split('/')
-        name = details.get("name")
-        if len(parts) == 3 and name:
-            main_key, sub_key_part, _ = parts
-            sub_key = f"{main_key}/{sub_key_part}"
-            if main_key in hierarchy and sub_key in hierarchy[main_key].get("subgroups", {}):
-                if address in hierarchy[main_key]["subgroups"][sub_key].get("addresses", {}):
-                    hierarchy[main_key]["subgroups"][sub_key]["addresses"][address]["name"] = name
-
-    sorted_main_keys = sorted(hierarchy.keys(), key=int)
-    for main_key in sorted_main_keys:
-        main_group = hierarchy[main_key]
-        mg_name = main_group.get('name') or f'MG {main_key}'
-        main_node_name = f"({main_key}) {mg_name}"
-        main_node = root_node["children"].setdefault(main_key, {"id": f"ga_main_{main_key}", "name": main_node_name, "children": {}})
-
-        sorted_sub_keys = sorted(main_group.get("subgroups", {}).keys(), key=lambda k: [int(p) for p in k.split('/')])
-        for sub_key in sorted_sub_keys:
-            sub_group = main_group["subgroups"][sub_key]
-            sg_name = sub_group.get('name') or f'SG {sub_key}'
-            sub_node_name = f"({sub_key}) {sg_name}"
-            sub_node = main_node["children"].setdefault(sub_key, {"id": f"ga_sub_{sub_key.replace('/', '_')}", "name": sub_node_name, "children": {}})
-
-            sorted_addresses = sorted(sub_group.get("addresses", {}).items(), key=lambda item: [int(p) for p in item[0].split('/')])
-            for addr_str, addr_details in sorted_addresses:
-                addr_name = addr_details.get('name') or 'N/A'
-                leaf_name = f"({addr_str}) {addr_name}"
-                sub_node["children"][addr_str] = {
-                    "id": f"ga_{addr_str}", 
-                    "name": leaf_name, 
-                    "data": {"type": "ga", "gas": {addr_str}, "original_name": leaf_name}, 
-                    "children": {}
-                }
-    
+    for hg_key in sorted(hierarchy.keys(), key=lambda x: int(x) if x.isdigit() else 0):
+        hg_data = hierarchy[hg_key]
+        hg_node = root_node["children"].setdefault(hg_data["name"], {"id": f"hg_{hg_key}", "name": hg_data["name"], "children": {}})
+        for mg_key in sorted(hg_data["subs"].keys(), key=lambda x: int(x) if x.isdigit() else 0):
+            mg_data = hg_data["subs"][mg_key]
+            mg_node = hg_node["children"].setdefault(mg_data["name"], {"id": f"mg_{hg_key}_{mg_key}", "name": mg_data["name"], "children": {}})
+            sorted_gas = sorted(mg_data["gas"].items(), key=lambda x: x[1].get("address_int", 0))
+            for ga_id, ga in sorted_gas:
+                ga_name = get_best_name(ga, ga_id)
+                label = f"({ga['address']}) {ga_name}"
+                mg_node["children"][label] = {"id": ga_id, "name": label, "data": {"type": "ga", "gas": {ga.get("address")}, "original_name": label}, "children": {}}
     return root_node
 
 def build_pa_tree_data(project: Dict) -> TreeData:
-    pa_tree = {"id": "pa_root", "name": "Physical Addresses", "children": {}}
-    devices = project.get("devices", {})
-    topology = project.get("topology", {})
+    if "project" in project: raw_data = project["project"]
+    else: raw_data = project
+
+    pa_tree = {"id": "pa_root", "name": "Geräte (Topologie)", "children": {}}
+    devices = raw_data.get("devices", {})
+    topology = raw_data.get("topology", {})
     
     area_names = {str(area['address']): (area.get('name') or '') for area in topology.get("areas", {}).values()}
     line_names = {}
@@ -233,77 +216,93 @@ def build_pa_tree_data(project: Dict) -> TreeData:
             line_id = f"{area['address']}.{line['address']}"
             line_names[line_id] = (line.get('name') or '')
 
-    for pa, device in devices.items():
+    for pa in sorted(devices.keys()):
+        device = devices[pa]
         parts = pa.split('.')
-        if len(parts) != 3:
-            logging.warning(f"Skipping malformed PA: {pa}")
-            continue
+        if len(parts)!= 3: continue
+        area_id, line_id, dev_id = parts
         
-        area_id, line_id_part, dev_id = parts
-        line_id = f"{area_id}.{line_id_part}"
+        area_lbl = f"Bereich {area_id}"
+        if area_names.get(area_id): area_lbl = f"({area_id}) {area_names[area_id]}"
+        area_node = pa_tree["children"].setdefault(area_lbl, {"id": f"a_{area_id}", "name": area_lbl, "children": {}})
 
-        area_name = area_names.get(area_id)
-        area_label = f"({area_id}) {area_name}" if area_name and area_name != f"Area {area_id}" else f"Area {area_id}"
-        area_node = pa_tree["children"].setdefault(area_id, {"id": f"pa_{area_id}", "name": area_label, "children": {}})
+        full_line_id = f"{area_id}.{line_id}"
+        line_lbl = f"Linie {full_line_id}"
+        if line_names.get(full_line_id): line_lbl = f"({full_line_id}) {line_names[full_line_id]}"
+        line_node = area_node["children"].setdefault(line_lbl, {"id": f"l_{full_line_id}", "name": line_lbl, "children": {}})
 
-        line_name = line_names.get(line_id)
-        line_label = f"({line_id}) {line_name}" if line_name and line_name != f"Line {line_id}" else f"Line {line_id}"
-        line_node = area_node["children"].setdefault(line_id_part, {"id": f"pa_{line_id}", "name": line_label, "children": {}})
+        dev_name = get_best_name(device, 'Unnamed')
+        device_node = line_node["children"].setdefault(f"({pa}) {dev_name}", {"id": f"dev_{pa}", "name": f"({pa}) {dev_name}", "children": {}})
 
-        dev_name = device.get('name') or 'N/A'
-        device_name = f"({pa}) {dev_name}"
-        device_node = line_node["children"].setdefault(dev_id, {"id": f"dev_{pa}", "name": device_name, "children": {}})
-        
         processed_co_ids = set()
         for ch_id, channel in device.get("channels", {}).items():
             ch_name = get_best_channel_name(channel, str(ch_id))
-            
             ch_node = device_node["children"].setdefault(ch_name, {"id": f"ch_{pa}_{ch_id}", "name": ch_name, "children": {}})
-            co_ids_in_channel = channel.get("communication_object_ids", [])
-            add_com_objects_to_node(ch_node, co_ids_in_channel, project)
-            processed_co_ids.update(co_ids_in_channel)
+            
+            # HIER IST DIE ÄNDERUNG: co_ids statt co_ids_in_channel für Konsistenz
+            co_ids = channel.get("communication_object_ids", [])
+            add_com_objects_to_node(ch_node, co_ids, project)
+            processed_co_ids.update(co_ids)
         
         all_co_ids = set(device.get("communication_object_ids", []))
-        device_level_co_ids = all_co_ids - processed_co_ids
-        if device_level_co_ids:
-            add_com_objects_to_node(device_node, list(device_level_co_ids), project)
-    
+        rem_ids = all_co_ids - processed_co_ids
+        if rem_ids: 
+            add_com_objects_to_node(device_node, list(rem_ids), project)
+            
     return pa_tree
 
 def build_building_tree_data(project: Dict) -> TreeData:
-    building_tree = {"id": "bldg_root", "name": "Building Structure", "children": {}}
-    locations = project.get("locations", {})
-    devices = project.get("devices", {})
-    
-    def process_space(space: Dict, parent_node: Dict):
-        space_name = space.get("name") or "Unnamed Area"
+    if "project" in project: raw_data = project["project"]
+    else: raw_data = project
+
+    locations = raw_data.get("locations", {})
+    devices = raw_data.get("devices", {})
+    building_tree = {"id": "bldg_root", "name": "Gebäude", "children": {}}
+
+    def process_space(space: Any, parent_node: Dict):
+        if not isinstance(space, dict): return
+
+        space_name = get_best_name(space, "Unnamed Area")
         space_id = space.get('identifier', space_name)
         space_node = parent_node["children"].setdefault(space_name, {"id": f"loc_{space_id}", "name": space_name, "children": {}})
-        
-        for pa in space.get("devices", []):
-            device = devices.get(pa)
-            if not device: continue
+
+        devs = space.get("devices", [])
+        if isinstance(devs, dict): devs = list(devs.keys())
+
+        if isinstance(devs, list):
+            for pa in devs:
+                if not isinstance(pa, str): continue
+                device = devices.get(pa)
+                if not device: continue
+
+                dev_name = get_best_name(device, 'Unnamed')
+                device_name = f"({pa}) {dev_name}"
+                device_node = space_node["children"].setdefault(device_name, {"id": f"dev_{pa}", "name": device_name, "children": {}})
+
+                processed_co_ids = set()
+                for ch_id, channel in device.get("channels", {}).items():
+                    ch_name = get_best_channel_name(channel, str(ch_id))
+                    ch_node = device_node["children"].setdefault(ch_name, {"id": f"ch_{pa}_{ch_id}", "name": ch_name, "children": {}})
+
+                    # --- FIX: Variable eindeutig benannt (co_ids), um NameError zu verhindern ---
+                    co_ids = channel.get("communication_object_ids", [])
+                    add_com_objects_to_node(ch_node, co_ids, project)
+                    processed_co_ids.update(co_ids)
+
+                all_co_ids = set(device.get("communication_object_ids", []))
+                rem_ids = all_co_ids - processed_co_ids
+                if rem_ids:
+                    add_com_objects_to_node(device_node, list(rem_ids), project)
+
+        sub_spaces = space.get("spaces", {})
+        if isinstance(sub_spaces, dict):
+             for child in sub_spaces.values(): process_space(child, space_node)
+        elif isinstance(sub_spaces, list):
+             for child in sub_spaces: process_space(child, space_node)
+
+    if isinstance(locations, dict):
+        for location in locations.values(): process_space(location, building_tree)
+    elif isinstance(locations, list):
+        for location in locations: process_space(location, building_tree)
             
-            dev_name = device.get('name') or 'Unnamed'
-            device_name = f"({pa}) {dev_name}"
-            device_node = space_node["children"].setdefault(device_name, {"id": f"dev_{pa}", "name": device_name, "children": {}})
-            
-            processed_co_ids = set()
-            for ch_id, channel in device.get("channels", {}).items():
-                ch_name = get_best_channel_name(channel, str(ch_id))
-                ch_node = device_node["children"].setdefault(ch_name, {"id": f"ch_{pa}_{ch_id}", "name": ch_name, "children": {}})
-                co_ids_in_channel = channel.get("communication_object_ids", [])
-                add_com_objects_to_node(ch_node, co_ids_in_channel, project)
-                processed_co_ids.update(co_ids_in_channel)
-            
-            all_co_ids = set(device.get("communication_object_ids", []))
-            device_level_co_ids = all_co_ids - processed_co_ids
-            if device_level_co_ids:
-                add_com_objects_to_node(device_node, list(device_level_co_ids), project)
-        
-        for child_space in space.get("spaces", {}).values():
-            process_space(child_space, space_node)
-            
-    for location in locations.values():
-        process_space(location, building_tree)
     return building_tree

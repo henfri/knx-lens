@@ -38,8 +38,15 @@ def _parse_lines_internal(
     new_payload_items = []
     new_cached_items = []
     
-    devices_dict = project_data.get("devices", {})
-    ga_dict = project_data.get("group_addresses", {})
+    # --- FIX für N/A Problem: Wrapper entpacken ---
+    if "project" in project_data:
+        actual_data = project_data["project"]
+    else:
+        actual_data = project_data
+
+    devices_dict = actual_data.get("devices", {})
+    ga_dict = actual_data.get("group_addresses", {})
+    # ----------------------------------------------
     
     has_time_filter = time_filter_start or time_filter_end
 
@@ -94,7 +101,6 @@ def _parse_lines_internal(
                 pa_name = devices_dict.get(pa, {}).get("name", "N/A")
                 ga_name = ga_dict.get(ga, {}).get("name", "N/A")
                 
-                # --- OPTIMIERUNG: Search-String hier vorab bauen ---
                 search_string = (
                     f"{timestamp} "
                     f"{pa} "
@@ -103,7 +109,6 @@ def _parse_lines_internal(
                     f"{ga_name} "
                     f"{payload_str}"
                 )
-                # --- ENDE OPTIMIERUNG ---
                 
                 new_cached_items.append({
                     "timestamp": timestamp,
@@ -112,7 +117,7 @@ def _parse_lines_internal(
                     "ga": ga,
                     "ga_name": ga_name,
                     "payload": payload_str,
-                    "search_string": search_string # <-- NEU HINZUGEFÜGT
+                    "search_string": search_string
                 })
 
         except (IndexError, StopIteration, csv.Error) as e:
@@ -127,12 +132,6 @@ def parse_and_cache_log_data(
     time_filter_start: Optional[datetime_time] = None, 
     time_filter_end: Optional[datetime_time] = None
 ) -> Tuple[Dict[str, List[Dict[str, str]]], List[Dict[str, str]]]:
-    """
-    [VOLLSTÄNDIGER RELOAD]
-    Parst die Log-Datei, baut das `payload_history` UND
-    den `cached_log_data` Cache komplett neu auf.
-    Gibt (payload_history, cached_log_data) zurück.
-    """
     payload_history: Dict[str, List[Dict[str, str]]] = {}
     cached_log_data: List[Dict[str, str]] = []
     
@@ -158,7 +157,6 @@ def parse_and_cache_log_data(
 
     return payload_history, cached_log_data
 
-# --- FUNKTION GEÄNDERT: GIBT JETZT NEUE ZEILEN ZURÜCK ---
 def append_new_log_lines(
     lines: List[str], 
     project_data: Dict, 
@@ -166,23 +164,17 @@ def append_new_log_lines(
     cached_log_data: List[Dict[str, str]],
     time_filter_start: Optional[datetime_time] = None, 
     time_filter_end: Optional[datetime_time] = None
-) -> List[Dict[str, str]]: # <-- Rückgabetyp geändert
-    """
-    [DELTA-RELOAD]
-    Parst nur neue Zeilen, hängt sie an die Listen an UND
-    GIBT die neuen Cache-Einträge zurück.
-    """
+) -> List[Dict[str, str]]:
     
     log_format = detect_log_format(lines[:20])
     if not log_format:
         if cached_log_data:
             first_entry = cached_log_data[0]
-            # Holen des search_string nicht möglich, da Payload fehlt
             simulated_line = f"{first_entry['timestamp']} | {first_entry['pa']} | | {first_entry['ga']} | | {first_entry['payload']}"
             log_format = detect_log_format([simulated_line])
     if not log_format:
         logging.warning("Konnte Log-Format für Delta-Update nicht bestimmen.")
-        return [] # Leere Liste zurückgeben
+        return [] 
 
     new_payload_items, new_cached_items = _parse_lines_internal(
         lines, project_data, log_format, time_filter_start, time_filter_end
@@ -195,4 +187,4 @@ def append_new_log_lines(
             payload_history[ga] = []
         payload_history[ga].append({'timestamp': item["timestamp"], 'payload': item["payload"]})
     
-    return new_cached_items # <-- Die neuen Zeilen zurückgeben
+    return new_cached_items
