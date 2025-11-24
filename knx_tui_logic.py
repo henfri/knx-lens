@@ -372,11 +372,29 @@ class KNXTuiLogic:
         display_label = ""
         
         if isinstance(node.data, dict) and "original_name" in node.data:
-            display_label = node.data["original_name"]
-            current_label = str(node.label)
-            payload_match = re.search(r"->\s*(\[bold yellow\].*)", current_label)
-            if payload_match:
-                display_label = f"{display_label} -> {payload_match.group(1)}"
+            original_name = node.data["original_name"]
+            display_label = original_name
+            
+            # Regenerate payload display from payload_history instead of extracting from label
+            node_gas = node.data.get("gas", set())
+            if node_gas:
+                combined_history = []
+                for ga in node_gas:
+                    if ga in self.payload_history:
+                        combined_history.extend(self.payload_history[ga])
+                
+                if combined_history:
+                    combined_history.sort(key=lambda x: x['timestamp'])
+                    latest_payloads = [item['payload'] for item in combined_history[-3:]]
+                    current_payload = latest_payloads[-1]
+                    previous_payloads = latest_payloads[-2::-1]
+                    
+                    payload_str = f"[bold yellow]{current_payload}[/]"
+                    if previous_payloads:
+                        history_str = ", ".join(previous_payloads)
+                        payload_str += f" [dim]({history_str})[/dim]"
+                    
+                    display_label = f"{original_name} -> {payload_str}"
         else:
             display_label = re.sub(r"^(\[[ *\-]] )+", "", str(node.label))
 

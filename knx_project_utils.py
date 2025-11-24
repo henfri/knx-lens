@@ -247,7 +247,12 @@ def build_pa_tree_data(project: Dict) -> TreeData:
         all_co_ids = set(device.get("communication_object_ids", []))
         rem_ids = all_co_ids - processed_co_ids
         if rem_ids: 
-            add_com_objects_to_node(device_node, list(rem_ids), project)
+            # Sort remaining CO IDs for consistent, predictable ordering by CO number
+            if "project" in project: project_data = project["project"]
+            else: project_data = project
+            com_objects_dict = project_data.get("communication_objects", {})
+            sorted_rem_ids = sorted(rem_ids, key=lambda x: com_objects_dict.get(x, {}).get('number', 0))
+            add_com_objects_to_node(device_node, sorted_rem_ids, project)
             
     return pa_tree
 
@@ -292,7 +297,10 @@ def build_building_tree_data(project: Dict) -> TreeData:
                 all_co_ids = set(device.get("communication_object_ids", []))
                 rem_ids = all_co_ids - processed_co_ids
                 if rem_ids:
-                    add_com_objects_to_node(device_node, list(rem_ids), project)
+                    # Sort remaining CO IDs for consistent, predictable ordering by CO number
+                    com_objects_dict = raw_data.get("communication_objects", {})
+                    sorted_rem_ids = sorted(rem_ids, key=lambda x: com_objects_dict.get(x, {}).get('number', 0))
+                    add_com_objects_to_node(device_node, sorted_rem_ids, project)
 
         sub_spaces = space.get("spaces", {})
         if isinstance(sub_spaces, dict):

@@ -51,7 +51,7 @@ binding_l_reload_filters = Binding("l", "reload_filter_tree", "Reload Groups", s
 binding_c_clear_selection = Binding("c", "clear_selection", "Clear Selection", show=False)
 binding_n_new_rule = Binding("n", "new_rule", "New Rule", show=False)
 binding_e_edit_rule = Binding("e", "edit_rule", "Edit Rule", show=False)
-binding_ctrl_n_new_group = Binding("ctrl+n", "new_filter_group", "New Group", show=False)
+binding_m_new_group = Binding("m", "new_filter_group", "New Group", show=False)
 binding_g_refresh_files = Binding("g", "refresh_files", "Refresh Files", show=False)
 
 ### --- TUI: HAUPTANWENDUNG ---
@@ -73,7 +73,7 @@ class KNXLens(App, KNXTuiLogic):
         binding_c_clear_selection,
         binding_n_new_rule,
         binding_e_edit_rule,
-        binding_ctrl_n_new_group,
+        binding_m_new_group,
         binding_g_refresh_files
     ]
 
