@@ -12,18 +12,39 @@ import logging
 from datetime import datetime, time as datetime_time
 from typing import Dict, List, Any, Optional, Tuple
 
+# ============================================================================
+# CONSTANTS
+# ============================================================================
+
 # Pre-compiled regex for performance
 GA_PATTERN = re.compile(r'\d+/\d+/\d+')
 
+# Log Format Detection
+LOG_FORMAT_PIPE_SEPARATED = 'pipe_separated'
+LOG_FORMAT_CSV = 'csv'
+PIPE_SEPARATOR = ' | '
+CSV_DELIMITER = ';'
+MIN_LOG_FORMAT_CHECK_LINES = 20
+
+# Timestamp Parsing
+TIMESTAMP_TIME_FORMAT = "%H:%M:%S"
+
 def detect_log_format(first_lines: List[str]) -> Optional[str]:
-    """Erkennt das Format einer Log-Datei (pipe oder csv)."""
+    """Detect log file format (pipe-separated or CSV).
+    
+    Args:
+        first_lines: First N lines from log file
+        
+    Returns:
+        Format string ('pipe_separated', 'csv') or None if unrecognized
+    """
     for line in first_lines:
         line = line.strip()
         if not line or line.startswith("="): continue
-        if ' | ' in line and len(line.split('|')) > 4 and re.search(r'\d+/\d+/\d+', line.split('|')[3]):
-            return 'pipe_separated'
-        if ';' in line:
-            return 'csv'
+        if PIPE_SEPARATOR in line and len(line.split('|')) > 4 and GA_PATTERN.search(line.split('|')[3]):
+            return LOG_FORMAT_PIPE_SEPARATED
+        if CSV_DELIMITER in line:
+            return LOG_FORMAT_CSV
     return None
 
 def _parse_lines_internal(
@@ -33,9 +54,20 @@ def _parse_lines_internal(
     time_filter_start: Optional[datetime_time] = None, 
     time_filter_end: Optional[datetime_time] = None
 ) -> Tuple[List[Dict[str, Any]], List[Dict[str, str]]]:
-    """
-    Interne Parsing-Engine. 
-    Gibt (neue_payload_einträge, neue_cache_einträge) zurück.
+    """Internal parsing engine for log lines.
+    
+    Parses log lines based on format and extracts timestamp, GA, payload.
+    Supports optional time filtering.
+    
+    Args:
+        lines: Log lines to parse
+        project_data: Loaded project data (wrapped or unwrapped)
+        log_format: Format type ('pipe_separated' or 'csv')
+        time_filter_start: Optional start time filter
+        time_filter_end: Optional end time filter
+        
+    Returns:
+        Tuple of (payload_items, cached_items) dicts
     """
     
     new_payload_items = []
@@ -60,7 +92,7 @@ def _parse_lines_internal(
         try:
             timestamp, pa, ga, payload = None, "N/A", None, None
             
-            if log_format == 'pipe_separated':
+            if log_format == LOG_FORMAT_PIPE_SEPARATED:
                 parts = [p.strip() for p in clean_line.split('|')]
                 if len(parts) > 3:
                     timestamp = parts[0]
@@ -68,7 +100,7 @@ def _parse_lines_internal(
                     pa = parts[1] if len(parts) > 1 else "N/A"
                     payload = parts[5] if len(parts) > 5 else None
             
-            elif log_format == 'csv':
+            elif log_format == LOG_FORMAT_CSV:
                 row = next(csv.reader([clean_line], delimiter=';'))
                 if len(row) > 4:
                     timestamp = row[0]
@@ -81,7 +113,7 @@ def _parse_lines_internal(
                 if has_time_filter:
                     try:
                         time_str = timestamp.split(' ')[1].split('.')[0]
-                        log_time = datetime.strptime(time_str, "%H:%M:%S").time()
+                        log_time = datetime.strptime(time_str, TIMESTAMP_TIME_FORMAT).time()
                         
                         if time_filter_start and log_time < time_filter_start:
                             continue 
@@ -135,10 +167,21 @@ def parse_and_cache_log_data(
     time_filter_start: Optional[datetime_time] = None, 
     time_filter_end: Optional[datetime_time] = None
 ) -> Tuple[Dict[str, List[Dict[str, str]]], List[Dict[str, str]]]:
+    """Parse log file and build payload history + cache.
+    
+    Args:
+        lines: All log lines from file
+        project_data: Loaded project data
+        time_filter_start: Optional start time filter
+        time_filter_end: Optional end time filter
+        
+    Returns:
+        Tuple of (payload_history dict, cached_log_data list)
+    """
     payload_history: Dict[str, List[Dict[str, str]]] = {}
     cached_log_data: List[Dict[str, str]] = []
     
-    first_content_lines = [line for line in lines[:20] if line.strip() and not line.strip().startswith("=")]
+    first_content_lines = [line for line in lines[:MIN_LOG_FORMAT_CHECK_LINES] if line.strip() and not line.strip().startswith("=")]
     log_format = detect_log_format(first_content_lines)
     if not log_format:
         logging.warning("Konnte Log-Format beim Parsen für Cache nicht bestimmen.")
@@ -168,8 +211,20 @@ def append_new_log_lines(
     time_filter_start: Optional[datetime_time] = None, 
     time_filter_end: Optional[datetime_time] = None
 ) -> List[Dict[str, str]]:
+    """Append new log lines to existing cache and payload history.
     
-    log_format = detect_log_format(lines[:20])
+    Args:
+        lines: New log lines to append
+        project_data: Loaded project data
+        payload_history: Existing payload history (modified in place)
+        cached_log_data: Existing cache (modified in place)
+        time_filter_start: Optional start time filter
+        time_filter_end: Optional end time filter
+        
+    Returns:
+        List of newly added cache items
+    """
+    log_format = detect_log_format(lines[:MIN_LOG_FORMAT_CHECK_LINES])
     if not log_format:
         if cached_log_data:
             first_entry = cached_log_data[0]

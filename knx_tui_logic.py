@@ -23,9 +23,29 @@ from textual.widgets.tree import TreeNode
 
 from knx_log_utils import parse_and_cache_log_data, append_new_log_lines
 
-NAMED_FILTER_FILENAME = "named_filters.yaml" 
+# ============================================================================
+# CONSTANTS & TYPE DEFINITIONS
+# ============================================================================
+
 TreeData = Dict[str, Any]
-MAX_CACHE_SIZE = 50000 
+
+# Cache & Performance Settings
+MAX_CACHE_SIZE = 50000  # Maximum log lines to keep in memory
+PAYLOAD_HISTORY_LIMIT = 3  # Number of previous payloads to show
+TREE_UPDATE_BATCH_SIZE = 100  # Nodes to update before yielding control
+
+# File & Configuration
+NAMED_FILTER_FILENAME = "named_filters.yaml"
+NAMED_FILTER_DEFAULT_PATH = "named_filters.yaml"
+TREE_CACHE_SUFFIX = ".tree_cache.json"
+
+# Tree Node Keys
+TREE_KEY_CHILDREN = "children"
+TREE_KEY_NAME = "name"
+TREE_KEY_ORIGINAL_NAME = "original_name"
+TREE_KEY_GAS = "gas"
+TREE_KEY_NODE_ID = "node_id"
+TREE_KEY_DATA = "data" 
 
 class KNXTuiLogic:
     """

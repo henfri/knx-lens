@@ -19,16 +19,63 @@ try:
 except ImportError:
     XKNXProj = None
 
+# ============================================================================
+# CONSTANTS & TYPE DEFINITIONS
+# ============================================================================
+
 TreeData = Dict[str, Any]
 
+# Cache Settings
+CACHE_CHUNK_SIZE = 4096  # Bytes to read per iteration when computing MD5
+CACHE_FILE_SUFFIX = ".cache.json"
+
+# Project Data Keys
+PROJECT_KEY_WRAPPER = "project"
+PROJECT_KEY_MD5 = "md5"
+PROJECT_KEY_DEVICES = "devices"
+PROJECT_KEY_GROUP_ADDRESSES = "group_addresses"
+PROJECT_KEY_BUILDING = "building_structure"
+PROJECT_KEY_CHANNELS = "channels"
+
+# Device/GA Field Names
+FIELD_NAME = "name"
+FIELD_TEXT = "text"
+FIELD_FUNCTION_TEXT = "function_text"
+FIELD_DESCRIPTION = "description"
+FIELD_ADDRESS = "address"
+FIELD_INDIVIDUAL_ADDRESS = "individual_address"
+FIELD_DEVICE_ADDRESS = "device_address"
+FIELD_NUMBER = "number"
+FIELD_CHILDREN = "children"
+FIELD_COMMUNICATION_OBJECTS = "communication_object_ids"
+
 def get_md5_hash(file_path: str) -> str:
+    """Compute MD5 hash of file for cache invalidation.
+    
+    Args:
+        file_path: Path to file
+        
+    Returns:
+        Hex string of MD5 hash
+    """
     hash_md5 = hashlib.md5()
     with open(file_path, "rb") as f:
-        for chunk in iter(lambda: f.read(4096), b""):
+        for chunk in iter(lambda: f.read(CACHE_CHUNK_SIZE), b""):
             hash_md5.update(chunk)
     return hash_md5.hexdigest()
 
 def load_or_parse_project(knxproj_path: str, password: Optional[str]) -> Dict:
+    """Load KNX project from cache or parse from file.
+    
+    Uses MD5 hash for cache invalidation. Returns wrapped dict with 'project' key.
+    
+    Args:
+        knxproj_path: Path to .knxproj file
+        password: Optional password for encrypted project
+        
+    Returns:
+        Dict with 'project' (parsed data) and 'md5' (hash) keys
+    """
     if XKNXProj is None:
         logging.error("xknxproject ist nicht installiert.")
         return {}
@@ -36,27 +83,30 @@ def load_or_parse_project(knxproj_path: str, password: Optional[str]) -> Dict:
     if not os.path.exists(knxproj_path):
         raise FileNotFoundError(f"Projektdatei nicht gefunden unter '{knxproj_path}'")
     
-    cache_path = knxproj_path + ".cache.json"
+    cache_path = knxproj_path + CACHE_FILE_SUFFIX
     
     if os.path.exists(cache_path):
         try:
              with open(cache_path, 'r', encoding='utf-8') as f:
                 current_md5 = get_md5_hash(knxproj_path)
                 cache_data = json.load(f)
-                if cache_data.get("md5") == current_md5 and "project" in cache_data:
+                if cache_data.get(PROJECT_KEY_MD5) == current_md5 and PROJECT_KEY_WRAPPER in cache_data:
                     logging.info(f"Projekt aus Cache geladen.")
                     return cache_data 
         except Exception as e:
             logging.warning(f"Cache-Fehler ({e}), parse neu.")
 
     logging.info(f"Parse KNX-Projektdatei: {knxproj_path}...")
+    start_time = time.time()
     try:
         xknxproj = XKNXProj(knxproj_path, password=password)
         raw_parsed_data = xknxproj.parse()
+        parse_time = time.time() - start_time
+        logging.info(f"Projekt geparst in {parse_time:.2f}s")
         
         project_wrapper = {
-            "md5": get_md5_hash(knxproj_path),
-            "project": raw_parsed_data
+            PROJECT_KEY_MD5: get_md5_hash(knxproj_path),
+            PROJECT_KEY_WRAPPER: raw_parsed_data
         }
         
         try:
@@ -70,13 +120,24 @@ def load_or_parse_project(knxproj_path: str, password: Optional[str]) -> Dict:
         return {}
 
 def get_best_name(data: Dict, default_name: str) -> str:
+    """Extract best available name from data dict.
+    
+    Prefers: text > function_text, joined with ': '
+    
+    Args:
+        data: Device/GA data dict
+        default_name: Fallback if no name found
+        
+    Returns:
+        Human-readable name string
+    """
     if not isinstance(data, dict): 
         return default_name
     
     parts = []
-    if val := data.get("text"):
+    if val := data.get(FIELD_TEXT):
         parts.append(str(val).strip())
-    if val := data.get("function_text"):
+    if val := data.get(FIELD_FUNCTION_TEXT):
         parts.append(str(val).strip())
         
     if parts:
@@ -88,16 +149,32 @@ def get_best_name(data: Dict, default_name: str) -> str:
     return data.get("description") or default_name
 
 def get_best_channel_name(channel: Dict, channel_id: str) -> str:
+    """Get human-readable channel name with fallback.
+    
+    Args:
+        channel: Channel data dict
+        channel_id: Channel identifier for fallback
+        
+    Returns:
+        Channel name string
+    """
     return get_best_name(channel, f"Kanal {channel_id}")
 
-def add_com_objects_to_node(node: TreeData, co_ids: List[str], project_wrapper: Dict):
-    """
-    Fügt KOs hinzu. Löst NUR beim ersten GA-Link den Namen auf.
+def add_com_objects_to_node(node: TreeData, co_ids: List[str], project_wrapper: Dict) -> None:
+    """Add communication objects to tree node with GA links.
+    
+    Resolves first GA link for each CO and appends to node payload display.
+    Handles both wrapped and unwrapped project data.
+    
+    Args:
+        node: Tree node dict to add children to
+        co_ids: List of communication object IDs
+        project_wrapper: Wrapped project data with 'project' key
     """
     if not co_ids: return
     
     if "project" in project_wrapper: 
-        project_data = project_wrapper["project"]
+        project_data = project_wrapper[PROJECT_KEY_WRAPPER]
     else: 
         project_data = project_wrapper
 
