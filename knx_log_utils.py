@@ -12,6 +12,9 @@ import logging
 from datetime import datetime, time as datetime_time
 from typing import Dict, List, Any, Optional, Tuple
 
+# Pre-compiled regex for performance
+GA_PATTERN = re.compile(r'\d+/\d+/\d+')
+
 def detect_log_format(first_lines: List[str]) -> Optional[str]:
     """Erkennt das Format einer Log-Datei (pipe oder csv)."""
     for line in first_lines:
@@ -73,7 +76,7 @@ def _parse_lines_internal(
                     pa = row[1] if len(row) > 1 else "N/A"
                     payload = row[6] if len(row) > 6 else None
             
-            if timestamp and ga and re.match(r'\d+/\d+/\d+', ga):
+            if timestamp and ga and GA_PATTERN.match(ga):
                 
                 if has_time_filter:
                     try:

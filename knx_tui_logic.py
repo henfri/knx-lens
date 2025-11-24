@@ -349,6 +349,34 @@ class KNXTuiLogic:
             gas.update(self._get_descendant_gas(child))
         return gas
 
+    def _get_node_payload_display(self, node_gas: set) -> Optional[str]:
+        """
+        Extract and format payload display from payload_history.
+        Returns formatted Rich markup string with current and previous values, or None.
+        """
+        if not node_gas:
+            return None
+        
+        combined_history = []
+        for ga in node_gas:
+            if ga in self.payload_history:
+                combined_history.extend(self.payload_history[ga])
+        
+        if not combined_history:
+            return None
+        
+        combined_history.sort(key=lambda x: x['timestamp'])
+        latest_payloads = [item['payload'] for item in combined_history[-3:]]
+        current_payload = latest_payloads[-1]
+        previous_payloads = latest_payloads[-2::-1]
+        
+        payload_str = f"[bold yellow]{current_payload}[/]"
+        if previous_payloads:
+            history_str = ", ".join(previous_payloads)
+            payload_str += f" [dim]({history_str})[/dim]"
+        
+        return payload_str
+
     def _update_parent_prefixes_recursive(self, node: Optional[TreeNode]) -> None:
         if not node or not node.parent:
             return
@@ -377,24 +405,9 @@ class KNXTuiLogic:
             
             # Regenerate payload display from payload_history instead of extracting from label
             node_gas = node.data.get("gas", set())
-            if node_gas:
-                combined_history = []
-                for ga in node_gas:
-                    if ga in self.payload_history:
-                        combined_history.extend(self.payload_history[ga])
-                
-                if combined_history:
-                    combined_history.sort(key=lambda x: x['timestamp'])
-                    latest_payloads = [item['payload'] for item in combined_history[-3:]]
-                    current_payload = latest_payloads[-1]
-                    previous_payloads = latest_payloads[-2::-1]
-                    
-                    payload_str = f"[bold yellow]{current_payload}[/]"
-                    if previous_payloads:
-                        history_str = ", ".join(previous_payloads)
-                        payload_str += f" [dim]({history_str})[/dim]"
-                    
-                    display_label = f"{original_name} -> {payload_str}"
+            payload_display = self._get_node_payload_display(node_gas)
+            if payload_display:
+                display_label = f"{original_name} -> {payload_display}"
         else:
             display_label = re.sub(r"^(\[[ *\-]] )+", "", str(node.label))
 
@@ -419,24 +432,9 @@ class KNXTuiLogic:
             display_label = original_name
             
             node_gas = node.data.get("gas", set())
-            if node_gas:
-                combined_history = []
-                for ga in node_gas:
-                    if ga in self.payload_history:
-                        combined_history.extend(self.payload_history[ga])
-                
-                if combined_history:
-                    combined_history.sort(key=lambda x: x['timestamp'])
-                    latest_payloads = [item['payload'] for item in combined_history[-3:]]
-                    current_payload = latest_payloads[-1]
-                    previous_payloads = latest_payloads[-2::-1]
-                    
-                    payload_str = f"[bold yellow]{current_payload}[/]"
-                    if previous_payloads:
-                        history_str = ", ".join(previous_payloads)
-                        payload_str += f" [dim]({history_str})[/dim]"
-                    
-                    display_label = f"{original_name} -> {payload_str}"
+            payload_display = self._get_node_payload_display(node_gas)
+            if payload_display:
+                display_label = f"{original_name} -> {payload_display}"
         else:
             display_label = re.sub(r"^(\[[ *\-]] )+", "", str(node.label))
 
