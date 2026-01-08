@@ -58,6 +58,7 @@ binding_n_new_rule = Binding("n", "new_rule", "New Rule", show=False)
 binding_e_edit_rule = Binding("e", "edit_rule", "Edit Rule", show=False)
 binding_m_new_group = Binding("m", "new_filter_group", "New Group", show=False)
 binding_g_refresh_files = Binding("g", "refresh_files", "Refresh Files", show=False)
+binding_v_jump_last = Binding("v", "jump_to_log_end", "Jump to Log End", show=False)
 
 ### --- TUI: HAUPTANWENDUNG ---
 class KNXLens(App, KNXTuiLogic):
@@ -79,7 +80,8 @@ class KNXLens(App, KNXTuiLogic):
         binding_n_new_rule,
         binding_e_edit_rule,
         binding_m_new_group,
-        binding_g_refresh_files
+        binding_g_refresh_files,
+        binding_v_jump_last
     ]
 
     def __init__(self, config: Dict):
@@ -165,6 +167,7 @@ class KNXLens(App, KNXTuiLogic):
                 Binding("r", "reload_log_file", "Reload"),
                 Binding("t", "toggle_log_reload", "Auto-Reload"),
                 binding_i_time_filter,
+                binding_v_jump_last,
             ],
             "files_pane": [
                 binding_enter_load_file,
@@ -760,6 +763,38 @@ class KNXLens(App, KNXTuiLogic):
             self.log_widget.columns["ga_name"].width = name_width
         except KeyError: pass
 
+    def action_jump_to_log_end(self) -> None:
+        """Jump focus and cursor/scroll to the last row in the log view (best-effort)."""
+        self._reset_user_activity()
+        if not self.log_widget:
+            return
+        try:
+            # ensure the log pane is active and focused
+            try:
+                self.query_one(TabbedContent).active = "log_pane"
+            except Exception:
+                pass
+            try:
+                self.log_widget.focus()
+            except Exception:
+                pass
+
+            last_index = None
+            # determine row count
+            try:
+                last_index = max(0, int(self.log_widget.row_count) - 1)
+            except Exception:
+                # Nothing we can do
+                self.notify("Unable to determine last log row.", severity="warning")
+                return
+
+            # Select last row
+            self.log_widget.cursor_coordinate = (last_index, 0)
+
+            self.notify("Jumped to log end.")
+        except Exception as e:
+            logging.error(f"Error jumping to log end: {e}", exc_info=True)
+
 def main():
     try:
         logging.basicConfig(
@@ -795,3 +830,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
