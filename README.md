@@ -200,7 +200,7 @@ As an alternative to the terminal, you can also start the explorer via the web i
     ```bash
     python knx-lens-web.py
     ```
-2.  **Open your browser** and go to the displayed address (usually `http://127.0.0.1:8080`). The operation in the browser is identical to that in the terminal.
+2.  **Open your browser** and go to the displayed address (usually `http://ipserver:8000`). The operation in the browser is identical to that in the terminal.
 3.  You can also access the web server from other devices. Use the following URL: http://ipserver:8000 
 
 

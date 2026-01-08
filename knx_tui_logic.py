@@ -232,9 +232,18 @@ class KNXTuiLogic:
                     if not self.regex_filter.search(log_entry["search_string"]):
                         continue
                 
+                # Smarte Payload-Kürzung für Display
+                payload = log_entry["payload"]
+                if payload.startswith("ControlDimming(") and payload.endswith(")"):
+                    payload = payload[15:-1]  # Entferne "ControlDimming(" und ")"
+                    payload = payload.replace("control=", "")  # Entferne "control="
+                    payload = payload.replace("step_code", "step")  # Ersetze step_code durch step
+                if len(payload) > 23:
+                    payload = payload[:20] + "..."
+                
                 rows_to_add.append((
                     log_entry["timestamp"], log_entry["pa"], log_entry["pa_name"],
-                    log_entry["ga"], log_entry["ga_name"], log_entry["payload"]
+                    log_entry["ga"], log_entry["ga_name"], payload
                 ))
             
             found_count = len(rows_to_add)
@@ -343,10 +352,19 @@ class KNXTuiLogic:
                 if has_global_regex_filter:
                     if not self.regex_filter.search(item["search_string"]):
                         continue 
+                
+                # Smarte Payload-Kürzung für Display
+                payload = item["payload"]
+                if payload.startswith("ControlDimming(") and payload.endswith(")"):
+                    payload = payload[15:-1]  # Entferne "ControlDimming(" und ")"
+                    payload = payload.replace("control=", "")  # Entferne "control="
+                    payload = payload.replace("step_code", "step")  # Ersetze step_code durch step
+                if len(payload) > 23:
+                    payload = payload[:20] + "..."
                         
                 rows_to_add.append((
                     item["timestamp"], item["pa"], item["pa_name"],
-                    item["ga"], item["ga_name"], item["payload"]
+                    item["ga"], item["ga_name"], payload
                 ))
             
             if not rows_to_add: return 
@@ -361,6 +379,11 @@ class KNXTuiLogic:
                 self.log_widget.add_rows(rows_to_add)
                 if is_at_bottom:
                     self.log_widget.scroll_end(animate=False, duration=0.0)
+                
+                # Update caption after adding rows
+                if self.log_caption_label:
+                    total_displayed = self.log_widget.row_count
+                    self.log_caption_label.update(f"{total_displayed} entries shown.")
             
         except Exception as e:
             logging.error(f"Fehler im efficient_log_tail: {e}", exc_info=True)

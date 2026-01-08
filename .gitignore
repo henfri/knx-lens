@@ -4,6 +4,8 @@
 # Log-Dateien
 knx_app_debug.log
 knx_bus.log
+*.knxproj
+*.knxproj.cache.json
 
 # Veraltete Dateien
 old/

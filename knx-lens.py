@@ -423,6 +423,9 @@ class KNXLens(App, KNXTuiLogic):
                 self._update_node_and_children_prefixes(node)
                 if node.parent: self._update_parent_prefixes_recursive(node.parent)
                 self._update_named_filter_prefixes()
+                
+                # Update labels to preserve payload history
+                self._update_tree_labels_recursively(node)
             
             self.log_view_is_dirty = True
             if self.query_one(TabbedContent).active == "log_pane":
