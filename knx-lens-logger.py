@@ -57,8 +57,11 @@ class ZipTimedRotatingFileHandler(TimedRotatingFileHandler):
             logging.exception("Fehler bei der Log-Rotation zu ZIP")
 
 
-def setup_knx_bus_logger(log_path: str, is_daemon_mode: bool) -> logging.Logger:
-    """Konfiguriert den Logger für den reinen KNX-Busverkehr."""
+def setup_knx_bus_logger(log_path: str, is_daemon_mode: bool, backup_count: int = 30) -> logging.Logger:
+    """Konfiguriert den Logger für den reinen KNX-Busverkehr.
+
+    backup_count: Anzahl der aufbewahrten rotierenden Log-Dateien (weitergereicht an TimedRotatingFileHandler.backupCount)
+    """
     log_dir = Path(log_path)
     log_dir.mkdir(parents=True, exist_ok=True)
     log_file = log_dir / "knx_bus.log"
@@ -77,7 +80,7 @@ def setup_knx_bus_logger(log_path: str, is_daemon_mode: bool) -> logging.Logger:
         log_file,
         when="midnight",
         interval=1,
-        backupCount=30,  # Keep 30 days of logs
+        backupCount=backup_count,  # Use provided backup_count (from .env via caller)
         encoding='utf-8'
     )
     file_handler.setFormatter(formatter)
@@ -214,8 +217,20 @@ async def start_logger_mode():
     ets_project_file = os.getenv("KNX_PROJECT_PATH")
     ets_password = os.getenv("KNX_PASSWORD")
 
-    # Logger wird jetzt mit dem Daemon-Status initialisiert
-    bus_logger = setup_knx_bus_logger(log_path, is_daemon_mode)
+    # Read BACKUP_COUNT from environment (dotenv). Default to 30 on missing/invalid value.
+    backup_count_env = os.getenv("BACKUP_COUNT")
+    backup_count = 30
+    if backup_count_env is not None:
+        try:
+            backup_count = int(backup_count_env)
+            if backup_count < 0:
+                raise ValueError("BACKUP_COUNT must be non-negative")
+        except ValueError:
+            logging.warning(f"Invalid BACKUP_COUNT value '{backup_count_env}' in .env file; using default value.")
+            backup_count = 30
+    logging.info(f"BACKUP_COUNT set to {backup_count} days.")
+
+    bus_logger = setup_knx_bus_logger(log_path, is_daemon_mode, backup_count)
 
     if not is_daemon_mode:
         print("\n" + "=" * 50)
@@ -319,4 +334,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-    
