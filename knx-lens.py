@@ -98,6 +98,9 @@ class KNXLens(App, KNXTuiLogic):
         self.log_auto_reload_enabled: bool = False         
         self.log_reload_timer: Optional[Timer] = None
         self.payload_history: Dict[str, List[Dict[str, str]]] = {}
+        self.stats_pa_ga_data: TreeData = {}
+        self.stats_ga_pa_data: TreeData = {}
+        self.stats_needs_update: bool = True
         self.cached_log_data: List[Dict[str, str]] = []
         self.time_filter_start: Optional[datetime_time] = None
         self.time_filter_end: Optional[datetime_time] = None
@@ -147,6 +150,10 @@ class KNXLens(App, KNXTuiLogic):
                 Binding("f", "filter_tree", "Filter Tree"),
                 Binding("escape", "reset_filter", "Reset Filter"),
                 Binding("c", "clear_selection", "Clear Selection"),
+                binding_i_time_filter,
+            ],
+            "stats_pane": [
+                Binding("r", "reload_log_file", "Reload"),
                 binding_i_time_filter,
             ],
             "log_pane": [
@@ -241,6 +248,9 @@ class KNXLens(App, KNXTuiLogic):
         filter_tree = Tree("Selection Groups", id="named_filter_tree")
         named_filter_container = Vertical(filter_tree, id="named_filter_container")
         
+        # Statistics Tab: ein Tree mit zwei Hauptknoten (GA → PA und PA → GA)
+        stats_tree = Tree("Statistics", id="stats_tree")
+        
         self.log_widget = DataTable(id="log_view")
         self.log_widget.cursor_type = "row"
         
@@ -291,6 +301,7 @@ class KNXLens(App, KNXTuiLogic):
         tabs.add_pane(TabPane("Physical Addresses", pa_tree, id="pa_pane"))
         tabs.add_pane(TabPane("Group Addresses", ga_tree, id="ga_pane"))
         tabs.add_pane(TabPane("Selection Groups", named_filter_container, id="filter_pane"))
+        tabs.add_pane(TabPane("Statistics", stats_tree, id="stats_pane"))
         tabs.add_pane(TabPane("Log View", log_view_container, id="log_pane"))
         tabs.add_pane(TabPane("Files", file_browser_container, id="files_pane"))
     
@@ -423,6 +434,20 @@ class KNXLens(App, KNXTuiLogic):
         self._reset_user_activity() 
         pane_id = event.pane.id
         self.update_footer(pane_id)
+        
+        # Statistics tab: berechne Stats on demand
+        if pane_id == "stats_pane":
+            if self.stats_needs_update:
+                self.notify("Computing statistics...")
+                self.stats_pa_ga_data = self._build_statistics_tree_data_pa_ga()
+                self.stats_ga_pa_data = self._build_statistics_tree_data_ga_pa()
+                self._populate_statistics_combined(self.query_one("#stats_tree", Tree), self.stats_pa_ga_data, self.stats_ga_pa_data)
+                self.stats_needs_update = False
+                self.notify("Statistics computed.")
+            try:
+                self.query_one("#stats_tree", Tree).focus()
+            except Exception: pass
+            return
         
         tree_id = f"#{pane_id.replace('_pane', '_tree')}"
         if tree_id in self.trees_need_payload_update:

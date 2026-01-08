@@ -34,6 +34,34 @@ MAX_CACHE_SIZE = 50000  # Maximum log lines to keep in memory
 PAYLOAD_HISTORY_LIMIT = 3  # Number of previous payloads to show
 TREE_UPDATE_BATCH_SIZE = 100  # Nodes to update before yielding control
 
+# Statistics sizing (Telegram length estimation)
+FRAME_OVERHEAD = 10
+DEFAULT_PAYLOAD_SIZE = 1
+DEFAULT_FRAME_SIZE = FRAME_OVERHEAD + DEFAULT_PAYLOAD_SIZE
+DPT_SIZE_MAP = {
+    1: 0,
+    2: 0,
+    3: 0,
+    4: 1,
+    5: 1,
+    6: 1,
+    7: 2,
+    8: 2,
+    9: 2,
+    10: 3,
+    11: 3,
+    12: 4,
+    13: 4,
+    14: 4,
+    15: 4,
+    16: 14,
+    17: 1,
+    18: 1,
+    19: 8,
+    20: 1,
+    232: 3,
+}
+
 # File & Configuration
 NAMED_FILTER_FILENAME = "named_filters.yaml"
 NAMED_FILTER_DEFAULT_PATH = "named_filters.yaml"
@@ -148,6 +176,7 @@ class KNXTuiLogic:
         logging.info("Log-Daten neu geladen. Aktualisiere UI...")
         
         self.trees_need_payload_update = {"#pa_tree", "#ga_tree"}
+        self.stats_needs_update = True
         try:
             self._update_tree_labels_recursively(self.query_one("#building_tree", Tree).root)
         except Exception: pass
@@ -280,6 +309,8 @@ class KNXTuiLogic:
 
             if not new_cached_items:
                 return
+
+            self.stats_needs_update = True
 
             try:
                 tabs = self.query_one(TabbedContent)
@@ -591,3 +622,439 @@ class KNXTuiLogic:
                 display_label = re.sub(r"^(\[[ *\-]] )+", "", str(node.label))
                 node.set_label(prefix + display_label)
         except Exception: pass
+
+    # --- STATISTIK-LOGIK ---
+
+    def _format_addr_label(self, identifier: str, display_name: str) -> str:
+        """Gibt eine kombinierte Darstellung zurück, aber ohne doppelte Wiederholung."""
+        if display_name and display_name != identifier and display_name != "N/A":
+            return f"{identifier} — {display_name}"
+        return identifier
+
+    def _parse_timestamp_to_epoch(self, ts_str: str) -> Optional[float]:
+        """Parst Timestamp zu Epoch-Sekunden; tolerant gegenüber ISO mit/ohne Datum."""
+        if not ts_str:
+            return None
+        try:
+            return datetime.fromisoformat(ts_str).timestamp()
+        except Exception:
+            try:
+                base_time = datetime.strptime(ts_str.split('.')[0], "%H:%M:%S").time()
+                today = datetime.today().date()
+                return datetime.combine(today, base_time).timestamp()
+            except Exception:
+                return None
+
+    def _estimate_cycle_seconds(self, epoch_list: List[float]) -> Optional[float]:
+        """Schätzt Wiederholintervall aus aufeinanderfolgenden Sendezeiten."""
+        if not epoch_list or len(epoch_list) < 25:
+            return None
+        times = sorted(epoch_list)
+        deltas = [round(times[i] - times[i-1]) for i in range(1, len(times)) if times[i] > times[i-1]]
+        if len(deltas) < 24:
+            return None
+        freq: Dict[float, int] = {}
+        for d in deltas:
+            freq[d] = freq.get(d, 0) + 1
+        mode_delta = max(freq.items(), key=lambda x: x[1])
+        if mode_delta[1] >= 24 and mode_delta[1] / len(deltas) >= 0.5:
+            return float(mode_delta[0])
+        return None
+
+    def _load_ga_size_map(self) -> Dict[str, int]:
+        """
+        Erstellt eine Map: GA-String -> Telegramm-Gesamtgröße (Bytes).
+        Nutzt DPT-Informationen aus dem geladenen Projekt.
+        """
+        ga_size_map = {}
+        
+        if not self.project_data:
+            return ga_size_map
+        
+        # Wrapper entpacken
+        actual_data = self.project_data.get("project", self.project_data)
+        
+        if "group_addresses" not in actual_data:
+            return ga_size_map
+        
+        for ga_str, ga_data in actual_data["group_addresses"].items():
+            dpt_main = None
+            
+            if ga_data.get("dpt"):
+                dpt_full = str(ga_data["dpt"])
+                try:
+                    dpt_main = int(dpt_full.split('.')[0])
+                except ValueError:
+                    pass
+            
+            payload_size = DEFAULT_PAYLOAD_SIZE
+            if dpt_main in DPT_SIZE_MAP:
+                payload_size = DPT_SIZE_MAP[dpt_main]
+            
+            ga_size_map[ga_str] = FRAME_OVERHEAD + payload_size
+        
+        return ga_size_map
+
+    def _build_statistics_tree_data_pa_ga(self) -> TreeData:
+        """
+        Baut Statistik-Baum: PA (Parent) -> GA (Child) mit Bytes und Count.
+        Sortiert nach Bytes (absteigend).
+        """
+        if not self.cached_log_data:
+            return {}
+        
+        ga_sizes = self._load_ga_size_map()
+        default_size = DEFAULT_FRAME_SIZE
+        
+        # Aggregation: (PA, GA) -> {count, bytes} + Timestamps
+        stats: Dict[Tuple[str, str], Dict[str, int]] = {}
+        times_by_key: Dict[Tuple[str, str], List[float]] = {}
+        for log_entry in self.cached_log_data:
+            pa = log_entry.get("pa", "unknown")
+            ga = log_entry.get("ga", "unknown")
+            key = (pa, ga)
+            ts_epoch = self._parse_timestamp_to_epoch(log_entry.get("timestamp", ""))
+            
+            if key not in stats:
+                stats[key] = {"count": 0, "bytes": 0}
+            if ts_epoch is not None:
+                times_by_key.setdefault(key, []).append(ts_epoch)
+
+            stats[key]["count"] += 1
+            frame_size = ga_sizes.get(ga, default_size)
+            stats[key]["bytes"] += frame_size
+        
+        # Sortieren nach Bytes (absteigend)
+        sorted_stats = sorted(stats.items(), key=lambda x: x[1]["bytes"], reverse=True)
+        
+        # Wrapper entpacken
+        actual_data = self.project_data.get("project", self.project_data)
+        devices_dict = actual_data.get("devices", {})
+        ga_dict = actual_data.get("group_addresses", {})
+        
+        # Baum aufbauen: PA -> {GAs} mit Stats
+        tree_data: Dict[str, Any] = {}
+        pa_totals: Dict[str, Dict[str, int]] = {}
+        
+        for (pa, ga), stat_data in sorted_stats:
+            if pa not in tree_data:
+                pa_name = devices_dict.get(pa, {}).get("name", pa)
+                tree_data[pa] = {
+                    "children": {},
+                    "gas": [],
+                    "name": self._format_addr_label(pa, pa_name),
+                    "node_id": pa,
+                    "bytes": 0,
+                    "count": 0
+                }
+                pa_totals[pa] = {"bytes": 0, "count": 0}
+            
+            pa_totals[pa]["bytes"] += stat_data["bytes"]
+            pa_totals[pa]["count"] += stat_data["count"]
+            
+            # GA als Child
+            ga_name = ga_dict.get(ga, {}).get("name", ga)
+            cycle = self._estimate_cycle_seconds(times_by_key.get((pa, ga), []))
+            tree_data[pa]["children"][ga] = {
+                "name": self._format_addr_label(ga, ga_name),
+                "node_id": ga,
+                "bytes": stat_data["bytes"],
+                "count": stat_data["count"],
+                "percent": 0.0,
+                "cycle_seconds": cycle
+            }
+        
+        # Total Bytes berechnen
+        total_bytes = sum(pa_totals[pa]["bytes"] for pa in pa_totals)
+        
+        # Prozentsätze und Labels anpassen
+        for pa in tree_data:
+            tree_data[pa]["bytes"] = pa_totals[pa]["bytes"]
+            tree_data[pa]["count"] = pa_totals[pa]["count"]
+            tree_data[pa]["percent"] = (tree_data[pa]["bytes"] / total_bytes * 100) if total_bytes > 0 else 0
+            
+            for ga in tree_data[pa]["children"]:
+                tree_data[pa]["children"][ga]["percent"] = (
+                    tree_data[pa]["children"][ga]["bytes"] / total_bytes * 100
+                ) if total_bytes > 0 else 0
+        
+        return tree_data
+
+    def _build_statistics_tree_data_ga_pa(self) -> TreeData:
+        """
+        Baut Statistik-Baum: GA (Parent) -> PA (Child) mit Bytes und Count.
+        Sortiert nach Bytes (absteigend).
+        """
+        if not self.cached_log_data:
+            return {}
+        
+        ga_sizes = self._load_ga_size_map()
+        default_size = DEFAULT_FRAME_SIZE
+        
+        # Aggregation: (GA, PA) -> {count, bytes} + Timestamps
+        stats: Dict[Tuple[str, str], Dict[str, int]] = {}
+        times_by_key: Dict[Tuple[str, str], List[float]] = {}
+        for log_entry in self.cached_log_data:
+            pa = log_entry.get("pa", "unknown")
+            ga = log_entry.get("ga", "unknown")
+            key = (ga, pa)
+            ts_epoch = self._parse_timestamp_to_epoch(log_entry.get("timestamp", ""))
+            
+            if key not in stats:
+                stats[key] = {"count": 0, "bytes": 0}
+            if ts_epoch is not None:
+                times_by_key.setdefault(key, []).append(ts_epoch)
+
+            stats[key]["count"] += 1
+            frame_size = ga_sizes.get(ga, default_size)
+            stats[key]["bytes"] += frame_size
+        
+        # Sortieren nach Bytes (absteigend)
+        sorted_stats = sorted(stats.items(), key=lambda x: x[1]["bytes"], reverse=True)
+        
+        # Wrapper entpacken
+        actual_data = self.project_data.get("project", self.project_data)
+        devices_dict = actual_data.get("devices", {})
+        ga_dict = actual_data.get("group_addresses", {})
+        
+        # Baum aufbauen: GA -> {PAs} mit Stats
+        tree_data: Dict[str, Any] = {}
+        ga_totals: Dict[str, Dict[str, int]] = {}
+        
+        for (ga, pa), stat_data in sorted_stats:
+            if ga not in tree_data:
+                ga_name = ga_dict.get(ga, {}).get("name", ga)
+                tree_data[ga] = {
+                    "children": {},
+                    "name": self._format_addr_label(ga, ga_name),
+                    "node_id": ga,
+                    "bytes": 0,
+                    "count": 0
+                }
+                ga_totals[ga] = {"bytes": 0, "count": 0}
+            
+            ga_totals[ga]["bytes"] += stat_data["bytes"]
+            ga_totals[ga]["count"] += stat_data["count"]
+            
+            # PA als Child
+            pa_name = devices_dict.get(pa, {}).get("name", pa)
+            cycle = self._estimate_cycle_seconds(times_by_key.get((ga, pa), []))
+            tree_data[ga]["children"][pa] = {
+                "name": self._format_addr_label(pa, pa_name),
+                "node_id": pa,
+                "bytes": stat_data["bytes"],
+                "count": stat_data["count"],
+                "percent": 0.0,
+                "cycle_seconds": cycle
+            }
+        
+        # Total Bytes berechnen
+        total_bytes = sum(ga_totals[ga]["bytes"] for ga in ga_totals)
+        
+        # Prozentsätze und Labels anpassen
+        for ga in tree_data:
+            tree_data[ga]["bytes"] = ga_totals[ga]["bytes"]
+            tree_data[ga]["count"] = ga_totals[ga]["count"]
+            tree_data[ga]["percent"] = (tree_data[ga]["bytes"] / total_bytes * 100) if total_bytes > 0 else 0
+            
+            for pa in tree_data[ga]["children"]:
+                tree_data[ga]["children"][pa]["percent"] = (
+                    tree_data[ga]["children"][pa]["bytes"] / total_bytes * 100
+                ) if total_bytes > 0 else 0
+        
+        return tree_data
+
+    def _populate_statistics_tree(self, tree: Tree, tree_data: TreeData, parent_node: Optional[TreeNode] = None) -> None:
+        """
+        Populiert einen Statistik-Baum mit Anteil und optionalem Sendetakt.
+        """
+        target_root = parent_node or tree.root
+        
+        for parent_key, parent_data in sorted(
+            tree_data.items(), 
+            key=lambda x: x[1].get("bytes", 0), 
+            reverse=True
+        ):
+            parent_percent = parent_data.get("percent", 0.0)
+            
+            parent_label = (
+                f"{parent_data['name']} "
+                f"[bold cyan]Share: {parent_percent:.2f}%[/]"
+            )
+            
+            parent_node = target_root.add(parent_label, expand=False)
+            parent_node.data = parent_key
+            
+            children = parent_data.get("children", {})
+            for child_key, child_data in sorted(
+                children.items(),
+                key=lambda x: x[1].get("bytes", 0),
+                reverse=True
+            ):
+                child_percent = child_data.get("percent", 0.0)
+                cycle_seconds = child_data.get("cycle_seconds")
+                
+                child_label = (
+                    f"{child_data['name']} "
+                    f"[yellow]Share: {child_percent:.2f}%[/]"
+                )
+                if cycle_seconds is not None:
+                    child_label += f" [green]Cycle: ~{int(round(cycle_seconds))}s[/]"
+                
+                child_node = parent_node.add(child_label)
+                child_node.data = child_key
+
+    def _build_statistics_tree_data_ga_hierarchy(self) -> TreeData:
+        """
+        Baut Statistik-Baum: GA-Hierarchie (Haupt/Mittel/Unter) mit Bytes und Count.
+        Sortiert nach Bytes (absteigend).
+        """
+        if not self.cached_log_data:
+            return {}
+        
+        ga_sizes = self._load_ga_size_map()
+        default_size = DEFAULT_FRAME_SIZE
+        
+        # Wrapper entpacken
+        actual_data = self.project_data.get("project", self.project_data)
+        ga_dict = actual_data.get("group_addresses", {})
+        
+        # Aggregation: GA -> {count, bytes, timestamps}
+        ga_stats: Dict[str, Dict[str, Any]] = {}
+        times_by_ga: Dict[str, List[float]] = {}
+        
+        for log_entry in self.cached_log_data:
+            ga = log_entry.get("ga", "unknown")
+            ts_epoch = self._parse_timestamp_to_epoch(log_entry.get("timestamp", ""))
+            
+            if ga not in ga_stats:
+                ga_stats[ga] = {"count": 0, "bytes": 0}
+            if ts_epoch is not None:
+                times_by_ga.setdefault(ga, []).append(ts_epoch)
+            
+            ga_stats[ga]["count"] += 1
+            frame_size = ga_sizes.get(ga, default_size)
+            ga_stats[ga]["bytes"] += frame_size
+        
+        # Hierarchie aufbauen: Haupt -> Mittel -> Unter
+        tree_data: Dict[str, Any] = {}
+        total_bytes = sum(ga_stats[ga]["bytes"] for ga in ga_stats)
+        
+        for ga, stat_data in ga_stats.items():
+            parts = ga.split('/')
+            if len(parts) != 3:
+                continue
+            
+            main_group, middle_group, sub_group = parts
+            
+            # Hauptgruppe
+            if main_group not in tree_data:
+                tree_data[main_group] = {
+                    "children": {},
+                    "name": f"Hauptgruppe {main_group}",
+                    "node_id": main_group,
+                    "bytes": 0,
+                    "count": 0,
+                    "percent": 0.0
+                }
+            
+            tree_data[main_group]["bytes"] += stat_data["bytes"]
+            tree_data[main_group]["count"] += stat_data["count"]
+            
+            # Mittelgruppe
+            middle_key = f"{main_group}/{middle_group}"
+            if middle_key not in tree_data[main_group]["children"]:
+                tree_data[main_group]["children"][middle_key] = {
+                    "children": {},
+                    "name": f"Mittelgruppe {middle_key}",
+                    "node_id": middle_key,
+                    "bytes": 0,
+                    "count": 0,
+                    "percent": 0.0
+                }
+            
+            tree_data[main_group]["children"][middle_key]["bytes"] += stat_data["bytes"]
+            tree_data[main_group]["children"][middle_key]["count"] += stat_data["count"]
+            
+            # Untergruppe (finale GA)
+            ga_name = ga_dict.get(ga, {}).get("name", ga)
+            cycle = self._estimate_cycle_seconds(times_by_ga.get(ga, []))
+            
+            tree_data[main_group]["children"][middle_key]["children"][ga] = {
+                "name": self._format_addr_label(ga, ga_name),
+                "node_id": ga,
+                "bytes": stat_data["bytes"],
+                "count": stat_data["count"],
+                "percent": (stat_data["bytes"] / total_bytes * 100) if total_bytes > 0 else 0,
+                "cycle_seconds": cycle
+            }
+        
+        # Prozentsätze für Haupt- und Mittelgruppen berechnen
+        for main_group in tree_data:
+            tree_data[main_group]["percent"] = (
+                tree_data[main_group]["bytes"] / total_bytes * 100
+            ) if total_bytes > 0 else 0
+            
+            for middle_key in tree_data[main_group]["children"]:
+                tree_data[main_group]["children"][middle_key]["percent"] = (
+                    tree_data[main_group]["children"][middle_key]["bytes"] / total_bytes * 100
+                ) if total_bytes > 0 else 0
+        
+        return tree_data
+
+    def _populate_ga_hierarchy_tree(self, tree: Tree, tree_data: TreeData, parent_node: Optional[TreeNode] = None) -> None:
+        """
+        Populiert einen hierarchischen GA-Baum (Haupt -> Mittel -> Unter).
+        """
+        target_root = parent_node or tree.root
+        
+        for main_key, main_data in sorted(
+            tree_data.items(),
+            key=lambda x: x[1].get("bytes", 0),
+            reverse=True
+        ):
+            main_percent = main_data.get("percent", 0.0)
+            main_label = f"{main_data['name']} [bold cyan]Share: {main_percent:.2f}%[/]"
+            main_node = target_root.add(main_label, expand=False)
+            main_node.data = main_key
+            
+            for middle_key, middle_data in sorted(
+                main_data.get("children", {}).items(),
+                key=lambda x: x[1].get("bytes", 0),
+                reverse=True
+            ):
+                middle_percent = middle_data.get("percent", 0.0)
+                middle_label = f"{middle_data['name']} [bold magenta]Share: {middle_percent:.2f}%[/]"
+                middle_node = main_node.add(middle_label, expand=False)
+                middle_node.data = middle_key
+                
+                for ga_key, ga_data in sorted(
+                    middle_data.get("children", {}).items(),
+                    key=lambda x: x[1].get("bytes", 0),
+                    reverse=True
+                ):
+                    ga_percent = ga_data.get("percent", 0.0)
+                    cycle_seconds = ga_data.get("cycle_seconds")
+                    
+                    ga_label = f"{ga_data['name']} [yellow]Share: {ga_percent:.2f}%[/]"
+                    if cycle_seconds is not None:
+                        ga_label += f" [green]Cycle: ~{int(round(cycle_seconds))}s[/]"
+                    
+                    ga_node = middle_node.add(ga_label)
+                    ga_node.data = ga_key
+
+    def _populate_statistics_combined(self, tree: Tree, pa_ga_data: TreeData, ga_pa_data: TreeData) -> None:
+        """Ein Tree mit drei Hauptknoten: GA→PA, PA→GA und GA-Hierarchie."""
+        tree.clear()
+        root = tree.root
+        
+        ga_root = root.add("GA → PA", expand=False)
+        self._populate_statistics_tree(tree, ga_pa_data, parent_node=ga_root)
+        
+        pa_root = root.add("PA → GA", expand=False)
+        self._populate_statistics_tree(tree, pa_ga_data, parent_node=pa_root)
+        
+        # Dritter Knoten: GA-Hierarchie
+        ga_hierarchy_data = self._build_statistics_tree_data_ga_hierarchy()
+        hierarchy_root = root.add("GA Tree (Hierarchy)", expand=False)
+        self._populate_ga_hierarchy_tree(tree, ga_hierarchy_data, parent_node=hierarchy_root)
