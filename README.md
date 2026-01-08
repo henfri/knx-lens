@@ -116,6 +116,9 @@ After the setup, your `.env` file should look something like this. You still nee
 # For the logger: The directory where logs are created
 LOG_PATH="C:/Users/YourUser/Documents/knx_logs"
 
+# Optional: How many rotated log files to keep (days)
+BACKUP_COUNT=30
+
 # For the explorer: The full path to the current log file
 KNX_LOG_FILE="C:/Users/YourUser/Documents/knx_logs/knx_bus.log"
 
@@ -131,6 +134,7 @@ KNX_PASSWORD="YOUR_PROJECT_PASSWORD" # Only fill in if the file is password-prot
 Further ENV Variables, to tweak the behaviour:
 MAX_LOG_LINES (Standard: 10000)
 RELOAD_INTERVAL (Standard: 5.0)
+BACKUP_COUNT (Standard: 30) Number of daily rotated log files to keep for knx-lens-logger; must be non-negative.
 Be aware, that these have a performance-Impact.
 
 **Important Environment Variables:**
@@ -141,6 +145,7 @@ Be aware, that these have a performance-Impact.
 * `KNX_GATEWAY_PORT`: Port of the gateway (usually `3671`).
 * `KNX_PROJECT_PATH`: Full path to your `.knxproj` file.
 * `KNX_PASSWORD`: The password for your `.knxproj` file, if it has one.
+* `BACKUP_COUNT`: How many rotated daily log files (in days) the logger keeps before pruning; defaults to 30.
 
 ***Note on Windows Paths:*** *It is highly recommended to use forward slashes (`/`) instead of backslashes (`\`) for all paths to avoid errors.*
 
