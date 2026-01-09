@@ -53,6 +53,7 @@ binding_n_new_rule = Binding("n", "new_rule", "New Rule", show=False)
 binding_e_edit_rule = Binding("e", "edit_rule", "Edit Rule", show=False)
 binding_m_new_group = Binding("m", "new_filter_group", "New Group", show=False)
 binding_g_refresh_files = Binding("g", "refresh_files", "Refresh Files", show=False)
+binding_search = Binding("/", "focus_search", "Focus Log Filter", show=False)
 
 ### --- TUI: HAUPTANWENDUNG ---
 class KNXLens(App, KNXTuiLogic):
@@ -74,7 +75,8 @@ class KNXLens(App, KNXTuiLogic):
         binding_n_new_rule,
         binding_e_edit_rule,
         binding_m_new_group,
-        binding_g_refresh_files
+        binding_g_refresh_files,
+        binding_search,
     ]
 
     def __init__(self, config: Dict):
@@ -160,6 +162,7 @@ class KNXLens(App, KNXTuiLogic):
                 Binding("r", "reload_log_file", "Reload"),
                 Binding("t", "toggle_log_reload", "Auto-Reload"),
                 binding_i_time_filter,
+                binding_search,
             ],
             "files_pane": [
                 binding_enter_load_file,
@@ -749,6 +752,23 @@ class KNXLens(App, KNXTuiLogic):
             self.log_widget.columns["ga_name"].width = name_width
         except KeyError: pass
 
+    def action_focus_search(self) -> None:
+        """Focus the global log regex input. If necessary switch to the Log View tab."""
+        try:
+            self._reset_user_activity()
+            tabs = self.query_one(TabbedContent)
+            # switch to the log pane so the input is visible/focusable
+            tabs.active = "log_pane"
+            # focus the input
+            input_widget = self.query_one("#regex_filter_input", Input)
+            input_widget.focus()
+        except Exception as e:
+            logging.debug(f"action_focus_search: could not focus regex input: {e}", exc_info=True)
+            try:
+                self.notify("Could not focus filter input.", severity="warning")
+            except Exception:
+                pass
+
 def main():
     try:
         logging.basicConfig(
@@ -783,3 +803,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
