@@ -400,7 +400,7 @@ class KNXTuiLogic:
         tree.clear()
         def natural_sort_key(item: Tuple[str, Any]):
             key_str = str(item[0])
-            return [int(c) if c.isdigit() else c.lower() for c in re.split('([0-9]+)', key_str)]
+            return [int(c) if c.isdecimal() else c.lower() for c in re.split('([0-9]+)', key_str)]
         def add_nodes(parent_node: TreeNode, children_data: Dict[str, TreeData]):
             for _, node_data in sorted(children_data.items(), key=natural_sort_key):
                 label = node_data.get("name")
@@ -1081,3 +1081,4 @@ class KNXTuiLogic:
         ga_hierarchy_data = self._build_statistics_tree_data_ga_hierarchy()
         hierarchy_root = root.add("GA Tree (Hierarchy)", expand=False)
         self._populate_ga_hierarchy_tree(tree, ga_hierarchy_data, parent_node=hierarchy_root)
+
