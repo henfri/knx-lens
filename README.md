@@ -120,7 +120,7 @@ LOG_PATH="C:/Users/YourUser/Documents/knx_logs"
 BACKUP_COUNT=30
 
 # For the explorer: The full path to the current log file
-KNX_LOG_FILE="C:/Users/YourUser/Documents/knx_logs/knx_bus.log"
+LOG_FILE="C:/Users/YourUser/Documents/knx_logs/knx_bus.log"
 
 # Gateway settings
 KNX_GATEWAY_IP="192.168.1.23"
@@ -140,7 +140,7 @@ Be aware, that these have a performance-Impact.
 **Important Environment Variables:**
 
 * `LOG_PATH`: Path to the **directory** for `knx-lens-logger.py` to create its rotating logs.
-* `KNX_LOG_FILE`: Full path to the specific **log file** (`knx_bus.log`) for `knx-lens.py` to read.
+* `LOG_FILE`: Full path to the specific **log file** (`knx_bus.log`) for `knx-lens.py` to read.
 * `KNX_GATEWAY_IP`: IP address of the KNX/IP gateway. Can be set to `AUTO`.
 * `KNX_GATEWAY_PORT`: Port of the gateway (usually `3671`).
 * `KNX_PROJECT_PATH`: Full path to your `.knxproj` file.
@@ -300,7 +300,7 @@ To automatically start the `knx-lens-web.py` on a modern Debian-based system (li
 ## Troubleshooting
 
 * **"Project file not found"**: Check the `KNX_PROJECT_PATH` in your `.env` file.
-* **"Log file not found"**: Check the `KNX_LOG_FILE` path in your `.env` file. It must point to the exact file being written by the logger.
+* **"Log file not found"**: Check the `LOG_FILE` path in your `.env` file. It must point to the exact file being written by the logger.
 * **"No gateway found"**: Ensure your computer is on the same network as the KNX/IP gateway and that no firewall is blocking UDP communication on port 3671.
 * **"Permission Denied" when writing the log file**: Check the write permissions for the directory specified in `LOG_PATH`.
 * **TUI looks strange**: Your terminal might not support advanced characters or colors. Try a modern terminal like Windows Terminal, iTerm2, or the default Linux terminal, or use the web interface.
