@@ -135,6 +135,7 @@ Further ENV Variables, to tweak the behaviour:
 MAX_LOG_LINES (Standard: 10000)
 RELOAD_INTERVAL (Standard: 5.0)
 BACKUP_COUNT (Standard: 30) Number of daily rotated log files to keep for knx-lens-logger; must be non-negative.
+NAMED_FILTERS_PATH (optional) Absolute path to `named_filters.yaml`. Defaults to the application directory.
 Be aware, that these have a performance-Impact.
 
 **Important Environment Variables:**
@@ -146,6 +147,7 @@ Be aware, that these have a performance-Impact.
 * `KNX_PROJECT_PATH`: Full path to your `.knxproj` file.
 * `KNX_PASSWORD`: The password for your `.knxproj` file, if it has one.
 * `BACKUP_COUNT`: How many rotated daily log files (in days) the logger keeps before pruning; defaults to 30.
+* `NAMED_FILTERS_PATH`: Absolute path to `named_filters.yaml` for saved selection groups. Defaults to the app directory. Useful for Docker or custom setups.
 
 ***Note on Windows Paths:*** *It is highly recommended to use forward slashes (`/`) instead of backslashes (`\`) for all paths to avoid errors.*
 

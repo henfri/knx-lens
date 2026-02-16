@@ -93,7 +93,7 @@ class KNXLens(App, KNXTuiLogic):
         self.selected_gas: Set[str] = set()
         self.regex_filter: Optional[re.Pattern] = None
         self.regex_filter_string: str = ""
-        self.named_filter_path: Path = Path(".") / "named_filters.yaml"
+        self.named_filter_path: Path = Path(config['named_filters_path']) if config.get('named_filters_path') else Path(__file__).parent / "named_filters.yaml"
         self.named_filters: Dict[str, List[str]] = {}
         self.named_filters_rules: Dict[str, Dict[str, Any]] = {}
         self.active_named_filters: Set[str] = set()
@@ -195,8 +195,6 @@ class KNXLens(App, KNXTuiLogic):
         
         try:
             self.project_data = load_or_parse_project(self.config['knxproj_path'], self.config['password'])
-            knxproj_dir = Path(self.config['knxproj_path']).parent
-            self.named_filter_path = knxproj_dir / "named_filters.yaml"
             
             self.ga_tree_data = build_ga_tree_data(self.project_data)
             self.pa_tree_data = build_pa_tree_data(self.project_data)
@@ -783,7 +781,8 @@ def main():
             'password': args.password or os.getenv('KNX_PASSWORD'),
             'log_path': os.getenv('LOG_PATH'),
             'max_log_lines': os.getenv('MAX_LOG_LINES', '10000'),
-            'reload_interval': os.getenv('RELOAD_INTERVAL', '5.0')
+            'reload_interval': os.getenv('RELOAD_INTERVAL', '5.0'),
+            'named_filters_path': os.getenv('NAMED_FILTERS_PATH'),
         }
         if not config['knxproj_path']:
             print("ERROR: Project path not found.", file=sys.stderr)

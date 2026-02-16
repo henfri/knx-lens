@@ -226,8 +226,6 @@ class KNXTuiLogic:
             # 2) Update config & state
             self.config['knxproj_path'] = knxproj_path
             self.project_data = project_data
-            knxproj_dir = Path(knxproj_path).parent
-            self.named_filter_path = knxproj_dir / "named_filters.yaml"
 
             # 3) Rebuild tree data from new project
             self.ga_tree_data = build_ga_tree_data(self.project_data)
