@@ -88,6 +88,8 @@ class KNXTuiLogic:
         Liest die Log-Datei von der Festplatte.
         """
         log_file_path = self.config.get("log_file") or os.path.join(self.config.get("log_path", "."), "knx_bus.log")
+        # Persist resolved path so action_toggle_log_reload can check the extension
+        self.config["log_file"] = log_file_path
 
         self.last_log_mtime = None
         self.last_log_position = 0
