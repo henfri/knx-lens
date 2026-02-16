@@ -85,8 +85,10 @@ class KNXTuiLogic:
         """Shorten payload string for display in log table."""
         if payload.startswith("ControlDimming(") and payload.endswith(")"):
             payload = payload[15:-1]
-            payload = payload.replace("control=", "")
-            payload = payload.replace("step_code", "step")
+            # Enum-Darstellung auflösen: <Step.INCREASE: True> → INCREASE
+            payload = re.sub(r'<\w+\.(\w+):\s*[^>]+>', r'\1', payload)
+            payload = payload.replace("control=", "").replace("step_code=", "step=")
+            payload = payload.replace("STEPCODE_", "")
         if len(payload) > max_len:
             payload = payload[:max_len - 3] + "..."
         return payload
