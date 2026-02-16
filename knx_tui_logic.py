@@ -22,6 +22,7 @@ from textual.widgets import Tree, DataTable, TabbedContent
 from textual.widgets.tree import TreeNode
 
 from knx_log_utils import parse_and_cache_log_data, append_new_log_lines
+from knx_project_utils import load_or_parse_project, build_ga_tree_data, build_pa_tree_data, build_building_tree_data
 
 # ============================================================================
 # CONSTANTS & TYPE DEFINITIONS
@@ -206,6 +207,74 @@ class KNXTuiLogic:
             self.action_toggle_log_reload(force_on=True)
         
         logging.info(f"Gesamtes Neuladen (sync) dauerte {time.time() - reload_start_time:.4f}s")
+
+    def _load_project_file(self, knxproj_path: str) -> None:
+        """
+        Load a new .knxproj file: re-parse project, rebuild all trees,
+        reset caches/selections/stats, and reload log data.
+        """
+        self._reset_user_activity()
+        logging.info(f"Loading project file: {knxproj_path}")
+
+        try:
+            # 1) Parse new project
+            project_data = load_or_parse_project(knxproj_path, self.config.get('password'))
+            if not project_data:
+                self.notify("Failed to parse project file.", severity="error")
+                return
+
+            # 2) Update config & state
+            self.config['knxproj_path'] = knxproj_path
+            self.project_data = project_data
+            knxproj_dir = Path(knxproj_path).parent
+            self.named_filter_path = knxproj_dir / "named_filters.yaml"
+
+            # 3) Rebuild tree data from new project
+            self.ga_tree_data = build_ga_tree_data(self.project_data)
+            self.pa_tree_data = build_pa_tree_data(self.project_data)
+            self.building_tree_data = build_building_tree_data(self.project_data)
+
+            # 4) Reset selections, caches, filters
+            self.selected_gas.clear()
+            self.active_named_filters.clear()
+            self.active_named_regex_rules.clear()
+            self.payload_history.clear()
+            self.cached_log_data.clear()
+            self.stats_pa_ga_data = {}
+            self.stats_ga_pa_data = {}
+            self.stats_needs_update = True
+            self.trees_need_payload_update = {"#pa_tree", "#ga_tree"}
+            self.time_filter_start = None
+            self.time_filter_end = None
+            self.regex_filter = None
+            self.regex_filter_string = ""
+
+            # 5) Repopulate UI trees
+            self._populate_tree_from_data(self.query_one("#building_tree", Tree), self.building_tree_data)
+            self._populate_tree_from_data(self.query_one("#pa_tree", Tree), self.pa_tree_data)
+            self._populate_tree_from_data(self.query_one("#ga_tree", Tree), self.ga_tree_data)
+
+            # 6) Reload named filters for new project location
+            self._load_named_filters()
+            self._populate_named_filter_tree()
+
+            # 7) Clear stats tree
+            try:
+                stats_tree = self.query_one("#stats_tree", Tree)
+                stats_tree.clear()
+            except Exception:
+                pass
+
+            # 8) Reload log data with new project context
+            self._reload_log_file_sync()
+
+            proj_name = Path(knxproj_path).stem
+            self.notify(f"Project loaded: {proj_name}")
+            self.query_one(TabbedContent).active = "building_pane"
+
+        except Exception as e:
+            logging.error(f"Error loading project file: {e}", exc_info=True)
+            self.notify(f"Error loading project: {e}", severity="error")
 
     # --- LOG-TABELLEN-LOGIK ---
 

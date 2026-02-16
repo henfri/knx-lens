@@ -363,7 +363,10 @@ class KNXLens(App, KNXTuiLogic):
         self._reset_user_activity() 
         event.stop()
         file_path = str(event.path)
-        if file_path.lower().endswith((".log", ".zip", ".txt")):
+        if file_path.lower().endswith(".knxproj"):
+            self.notify(f"Loading project: {os.path.basename(file_path)}")
+            self._load_project_file(file_path)
+        elif file_path.lower().endswith((".log", ".zip", ".txt")):
             self.notify(f"Loading file: {os.path.basename(file_path)}")
             self.config['log_file'] = file_path
             self._reload_log_file_sync()
@@ -495,13 +498,16 @@ class KNXLens(App, KNXTuiLogic):
             node = tree.cursor_node
             if node and node.data and not node.data.is_dir():
                 file_path = str(node.data.path)
-                if file_path.lower().endswith((".log", ".zip", ".txt")):
+                if file_path.lower().endswith(".knxproj"):
+                    self.notify(f"Loading project: {os.path.basename(file_path)}")
+                    self._load_project_file(file_path)
+                elif file_path.lower().endswith((".log", ".zip", ".txt")):
                     self.notify(f"Loading file: {os.path.basename(file_path)}")
                     self.config['log_file'] = file_path
                     self._reload_log_file_sync()
                     self.query_one(TabbedContent).active = "log_pane"
                 else:
-                    self.notify("Only .log, .zip, or .txt files can be loaded.", severity="warning")
+                    self.notify("Only .log, .zip, .txt or .knxproj files can be loaded.", severity="warning")
             elif node and node.data and node.data.is_dir(): pass
             else: self.notify("No file selected.", severity="warning")
         except Exception as e:
