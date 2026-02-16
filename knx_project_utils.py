@@ -267,10 +267,12 @@ def build_ga_tree_data(project: Dict) -> TreeData:
 
     for hg_key in sorted(hierarchy.keys(), key=lambda x: int(x) if x.isdigit() else 0):
         hg_data = hierarchy[hg_key]
-        hg_node = root_node["children"].setdefault(hg_data["name"], {"id": f"hg_{hg_key}", "name": hg_data["name"], "children": {}})
+        hg_label = f"({hg_key}) {hg_data['name']}"
+        hg_node = root_node["children"].setdefault(hg_label, {"id": f"hg_{hg_key}", "name": hg_label, "children": {}})
         for mg_key in sorted(hg_data["subs"].keys(), key=lambda x: int(x) if x.isdigit() else 0):
             mg_data = hg_data["subs"][mg_key]
-            mg_node = hg_node["children"].setdefault(mg_data["name"], {"id": f"mg_{hg_key}_{mg_key}", "name": mg_data["name"], "children": {}})
+            mg_label = f"({hg_key}/{mg_key}) {mg_data['name']}"
+            mg_node = hg_node["children"].setdefault(mg_label, {"id": f"mg_{hg_key}_{mg_key}", "name": mg_label, "children": {}})
             sorted_gas = sorted(mg_data["gas"].items(), key=lambda x: x[1].get("address_int", 0))
             for ga_id, ga in sorted_gas:
                 ga_name = get_best_name(ga, ga_id)
