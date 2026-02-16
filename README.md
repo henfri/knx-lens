@@ -58,6 +58,8 @@ KNX-Lens is tested in Linux and Windows.
 * **Intelligent Log Filtering (Selection Groups)**: Select individual devices, rooms, or functions in the explorer (using **'a'**) to filter the log. This selection (`[*]`) can be saved as a **"Selection Group"** (using **'s'**) for quick reuse.
 * **Advanced Selection Groups**: These groups (in their own tab) can contain specific Group Addresses (e.g., `1/1/1`) and **Regex rules** (e.g., `.*Light.*` or `.*Floor 1.*`). This allows you to build powerful, combined filters.
 * **Global AND Filter**: A dedicated input field in the "Log View" tab allows you to add a global Regex filter that is applied **in addition** (AND logic) to your "Selection Group" filters.
+* **Statistics Tab**: Shows bus traffic statistics grouped by GA→PA and PA→GA, including telegram counts and estimated bus load.
+* **File Browser**: Browse the filesystem to load log files (`.log`, `.zip`, `.txt`) or switch to a different `.knxproj` project file at runtime.
 
 ### `knx-lens-web.py`
 
@@ -196,7 +198,8 @@ python knx-lens.py
 | `n` | `New Rule` | (In "Selection Groups" tab) Adds a new rule (GA or Regex) to the selected group. |
 | `e` | `Edit Rule` | (In "Selection Groups" tab) Edits the selected rule. |
 | `Ctrl+n` | `New Group` | (In "Selection Groups" tab) Creates a new, empty selection group. |
-| `Enter` | `Load File` | (In "Files" tab) Loads the selected log file. |
+| `Enter` | `Load File` | (In "Files" tab) Loads the selected log file or switches to a different `.knxproj` project. |
+| `g` | `Refresh Files` | (In "Files" tab) Refreshes the file browser tree. |
 
 
 ### Step 3: Explore Logs and Project in the Web Browser
