@@ -80,6 +80,17 @@ class KNXTuiLogic:
     Diese Klasse enthält die gesamte "Business-Logik" der App.
     """
 
+    @staticmethod
+    def _truncate_payload(payload: str, max_len: int = 23) -> str:
+        """Shorten payload string for display in log table."""
+        if payload.startswith("ControlDimming(") and payload.endswith(")"):
+            payload = payload[15:-1]
+            payload = payload.replace("control=", "")
+            payload = payload.replace("step_code", "step")
+        if len(payload) > max_len:
+            payload = payload[:max_len - 3] + "..."
+        return payload
+
     # --- DATEN-LADE-LOGIK ---
 
     def _load_log_file_data_only(self) -> Tuple[bool, Optional[Exception]]:
@@ -88,6 +99,8 @@ class KNXTuiLogic:
         Liest die Log-Datei von der Festplatte.
         """
         log_file_path = self.config.get("log_file") or os.path.join(self.config.get("log_path", "."), "knx_bus.log")
+        # Persist resolved path so action_toggle_log_reload can check the extension
+        self.config["log_file"] = log_file_path
 
         self.last_log_mtime = None
         self.last_log_position = 0
@@ -232,14 +245,7 @@ class KNXTuiLogic:
                     if not self.regex_filter.search(log_entry["search_string"]):
                         continue
                 
-                # Smarte Payload-Kürzung für Display
-                payload = log_entry["payload"]
-                if payload.startswith("ControlDimming(") and payload.endswith(")"):
-                    payload = payload[15:-1]  # Entferne "ControlDimming(" und ")"
-                    payload = payload.replace("control=", "")  # Entferne "control="
-                    payload = payload.replace("step_code", "step")  # Ersetze step_code durch step
-                if len(payload) > 23:
-                    payload = payload[:20] + "..."
+                payload = self._truncate_payload(log_entry["payload"])
                 
                 rows_to_add.append((
                     log_entry["timestamp"], log_entry["pa"], log_entry["pa_name"],
@@ -353,14 +359,7 @@ class KNXTuiLogic:
                     if not self.regex_filter.search(item["search_string"]):
                         continue 
                 
-                # Smarte Payload-Kürzung für Display
-                payload = item["payload"]
-                if payload.startswith("ControlDimming(") and payload.endswith(")"):
-                    payload = payload[15:-1]  # Entferne "ControlDimming(" und ")"
-                    payload = payload.replace("control=", "")  # Entferne "control="
-                    payload = payload.replace("step_code", "step")  # Ersetze step_code durch step
-                if len(payload) > 23:
-                    payload = payload[:20] + "..."
+                payload = self._truncate_payload(item["payload"])
                         
                 rows_to_add.append((
                     item["timestamp"], item["pa"], item["pa_name"],
@@ -400,7 +399,7 @@ class KNXTuiLogic:
         tree.clear()
         def natural_sort_key(item: Tuple[str, Any]):
             key_str = str(item[0])
-            return [int(c) if c.isdigit() else c.lower() for c in re.split('([0-9]+)', key_str)]
+            return [int(c) if c.isdecimal() else c.lower() for c in re.split('([0-9]+)', key_str)]
         def add_nodes(parent_node: TreeNode, children_data: Dict[str, TreeData]):
             for _, node_data in sorted(children_data.items(), key=natural_sort_key):
                 label = node_data.get("name")
@@ -1081,3 +1080,4 @@ class KNXTuiLogic:
         ga_hierarchy_data = self._build_statistics_tree_data_ga_hierarchy()
         hierarchy_root = root.add("GA Tree (Hierarchy)", expand=False)
         self._populate_ga_hierarchy_tree(tree, ga_hierarchy_data, parent_node=hierarchy_root)
+

@@ -20,3 +20,25 @@ __pycache__/
 textual.txt
 ets.py
 modbus_huawei.py
+
+# IDE / Editor
+.vscode/
+
+# Analyse-Dokus und Arbeitsnotizen
+CO_MISSING_ISSUE_ANALYSIS.md
+IMPROVEMENTS_IMPLEMENTED.md
+IMPROVEMENTS_SESSION_2.md
+PARAMETER_IMPLEMENTATION_PLAN.md
+PARAMETER_IMPLEMENTATION_PLAN.txt
+PARAMETER_PARSING_README.txt
+SETUP_COMPLETE.md
+
+# Debug-/Analyse-Scripts
+scripts/
+analyze_parameter_structure.py
+test_parameter_parsing.py
+parameter_debug/
+
+# Externe Quellen und Rohdaten
+xknxproject_source/
+M-00FA_A-A600-06-CCD7.xml

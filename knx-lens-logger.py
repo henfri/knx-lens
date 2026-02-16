@@ -143,6 +143,12 @@ def telegram_to_log_message(telegram: Telegram, knx_project: Optional[KNXProject
                 full_data_str = str(data)
                 # .split() -> "5.0 °C"
                 data_str = full_data_str.split(' (DPT', 1)[0]
+                
+                # Kompakte Darstellung für ControlDimming
+                if data_str.startswith("ControlDimming(") and data_str.endswith(")"):
+                    data_str = data_str[15:-1]  # Entferne "ControlDimming(" und ")"
+                    data_str = data_str.replace("control=", "")
+                    data_str = data_str.replace("step_code=StepCode.", "step=")
     
         else:
             # Fallback für <GroupValueRead /> oder wenn DPT im Projekt fehlt
