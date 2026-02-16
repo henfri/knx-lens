@@ -80,6 +80,17 @@ class KNXTuiLogic:
     Diese Klasse enthält die gesamte "Business-Logik" der App.
     """
 
+    @staticmethod
+    def _truncate_payload(payload: str, max_len: int = 23) -> str:
+        """Shorten payload string for display in log table."""
+        if payload.startswith("ControlDimming(") and payload.endswith(")"):
+            payload = payload[15:-1]
+            payload = payload.replace("control=", "")
+            payload = payload.replace("step_code", "step")
+        if len(payload) > max_len:
+            payload = payload[:max_len - 3] + "..."
+        return payload
+
     # --- DATEN-LADE-LOGIK ---
 
     def _load_log_file_data_only(self) -> Tuple[bool, Optional[Exception]]:
@@ -234,14 +245,7 @@ class KNXTuiLogic:
                     if not self.regex_filter.search(log_entry["search_string"]):
                         continue
                 
-                # Smarte Payload-Kürzung für Display
-                payload = log_entry["payload"]
-                if payload.startswith("ControlDimming(") and payload.endswith(")"):
-                    payload = payload[15:-1]  # Entferne "ControlDimming(" und ")"
-                    payload = payload.replace("control=", "")  # Entferne "control="
-                    payload = payload.replace("step_code", "step")  # Ersetze step_code durch step
-                if len(payload) > 23:
-                    payload = payload[:20] + "..."
+                payload = self._truncate_payload(log_entry["payload"])
                 
                 rows_to_add.append((
                     log_entry["timestamp"], log_entry["pa"], log_entry["pa_name"],
@@ -355,14 +359,7 @@ class KNXTuiLogic:
                     if not self.regex_filter.search(item["search_string"]):
                         continue 
                 
-                # Smarte Payload-Kürzung für Display
-                payload = item["payload"]
-                if payload.startswith("ControlDimming(") and payload.endswith(")"):
-                    payload = payload[15:-1]  # Entferne "ControlDimming(" und ")"
-                    payload = payload.replace("control=", "")  # Entferne "control="
-                    payload = payload.replace("step_code", "step")  # Ersetze step_code durch step
-                if len(payload) > 23:
-                    payload = payload[:20] + "..."
+                payload = self._truncate_payload(item["payload"])
                         
                 rows_to_add.append((
                     item["timestamp"], item["pa"], item["pa_name"],
