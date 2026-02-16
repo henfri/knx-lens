@@ -564,10 +564,10 @@ class KNXLens(App, KNXTuiLogic):
             if self.log_reload_timer:
                 self.log_reload_timer.stop()
                 self.log_reload_timer = None
-                self.notify("Log Auto-Reload [bold red]OFF[/].", title="Log View")
             return
         if force_on:
             self.last_user_activity = time.time() 
+            self.log_auto_reload_enabled = True
             if not self.log_reload_timer:
                 self.log_reload_timer = self.set_interval(TIMER_INTERVAL, self._efficient_log_tail)
                 self.notify(f"Log Auto-Reload [bold green]ON[/] ({TIMER_INTERVAL}s).", title="Log View")
@@ -576,9 +576,11 @@ class KNXLens(App, KNXTuiLogic):
         if self.log_reload_timer:
             self.log_reload_timer.stop()
             self.log_reload_timer = None
+            self.log_auto_reload_enabled = False
             self.notify("Log Auto-Reload [bold red]OFF[/].", title="Log View")
         else:
             if (self.config.get("log_file") or "").lower().endswith((".log", ".txt")):
+                self.log_auto_reload_enabled = True
                 self.log_reload_timer = self.set_interval(TIMER_INTERVAL, self._efficient_log_tail)
                 self.notify(f"Log Auto-Reload [bold green]ON[/] ({TIMER_INTERVAL}s).", title="Log View")
             else:
