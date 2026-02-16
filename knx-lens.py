@@ -19,16 +19,21 @@ from typing import Dict, List, Any, Optional, Set, Tuple
 try:
     import yaml
 except ImportError:
+    print("ERROR: PyYAML is not installed. Run: pip install PyYAML", file=sys.stderr)
     sys.exit(1)
 
-from dotenv import load_dotenv
-from textual.app import App, ComposeResult
-from textual.binding import Binding
-from textual.containers import Vertical
-from textual.widgets import Header, Tree, Static, TabbedContent, TabPane, DataTable, DirectoryTree, Input
-from textual.widgets.tree import TreeNode
-from textual import events
-from textual.timer import Timer
+try:
+    from dotenv import load_dotenv
+    from textual.app import App, ComposeResult
+    from textual.binding import Binding
+    from textual.containers import Vertical
+    from textual.widgets import Header, Tree, Static, TabbedContent, TabPane, DataTable, DirectoryTree, Input
+    from textual.widgets.tree import TreeNode
+    from textual import events
+    from textual.timer import Timer
+except ImportError as e:
+    print(f"ERROR: Missing dependency: {e}. Run: pip install -r requirements.txt", file=sys.stderr)
+    sys.exit(1)
 
 from knx_project_utils import (
     load_or_parse_project, 
