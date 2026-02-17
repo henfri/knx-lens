@@ -58,6 +58,8 @@ KNX-Lens is tested in Linux and Windows.
 * **Intelligent Log Filtering (Selection Groups)**: Select individual devices, rooms, or functions in the explorer (using **'a'**) to filter the log. This selection (`[*]`) can be saved as a **"Selection Group"** (using **'s'**) for quick reuse.
 * **Advanced Selection Groups**: These groups (in their own tab) can contain specific Group Addresses (e.g., `1/1/1`) and **Regex rules** (e.g., `.*Light.*` or `.*Floor 1.*`). This allows you to build powerful, combined filters.
 * **Global AND Filter**: A dedicated input field in the "Log View" tab allows you to add a global Regex filter that is applied **in addition** (AND logic) to your "Selection Group" filters.
+* **Statistics Tab**: Shows bus traffic statistics grouped by GA→PA and PA→GA, including telegram counts and estimated bus load.
+* **File Browser**: Browse the filesystem to load log files (`.log`, `.zip`, `.txt`) or switch to a different `.knxproj` project file at runtime.
 
 ### `knx-lens-web.py`
 
@@ -135,6 +137,7 @@ Further ENV Variables, to tweak the behaviour:
 MAX_LOG_LINES (Standard: 10000)
 RELOAD_INTERVAL (Standard: 5.0)
 BACKUP_COUNT (Standard: 30) Number of daily rotated log files to keep for knx-lens-logger; must be non-negative.
+NAMED_FILTERS_PATH (optional) Absolute path to `named_filters.yaml`. Defaults to the application directory.
 Be aware, that these have a performance-Impact.
 
 **Important Environment Variables:**
@@ -146,6 +149,7 @@ Be aware, that these have a performance-Impact.
 * `KNX_PROJECT_PATH`: Full path to your `.knxproj` file.
 * `KNX_PASSWORD`: The password for your `.knxproj` file, if it has one.
 * `BACKUP_COUNT`: How many rotated daily log files (in days) the logger keeps before pruning; defaults to 30.
+* `NAMED_FILTERS_PATH`: Absolute path to `named_filters.yaml` for saved selection groups. Defaults to the app directory. Useful for Docker or custom setups.
 
 ***Note on Windows Paths:*** *It is highly recommended to use forward slashes (`/`) instead of backslashes (`\`) for all paths to avoid errors.*
 
@@ -194,7 +198,8 @@ python knx-lens.py
 | `n` | `New Rule` | (In "Selection Groups" tab) Adds a new rule (GA or Regex) to the selected group. |
 | `e` | `Edit Rule` | (In "Selection Groups" tab) Edits the selected rule. |
 | `Ctrl+n` | `New Group` | (In "Selection Groups" tab) Creates a new, empty selection group. |
-| `Enter` | `Load File` | (In "Files" tab) Loads the selected log file. |
+| `Enter` | `Load File` | (In "Files" tab) Loads the selected log file or switches to a different `.knxproj` project. |
+| `g` | `Refresh Files` | (In "Files" tab) Refreshes the file browser tree. |
 
 
 ### Step 3: Explore Logs and Project in the Web Browser

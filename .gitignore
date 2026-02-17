@@ -6,6 +6,7 @@ knx_app_debug.log
 knx_bus.log
 *.knxproj
 *.knxproj.cache.json
+named_filters.yaml
 
 # Veraltete Dateien
 old/
