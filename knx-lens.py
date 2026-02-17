@@ -19,16 +19,21 @@ from typing import Dict, List, Any, Optional, Set, Tuple
 try:
     import yaml
 except ImportError:
+    print("ERROR: PyYAML is not installed. Run: pip install PyYAML", file=sys.stderr)
     sys.exit(1)
 
-from dotenv import load_dotenv
-from textual.app import App, ComposeResult
-from textual.binding import Binding
-from textual.containers import Vertical
-from textual.widgets import Header, Tree, Static, TabbedContent, TabPane, DataTable, DirectoryTree, Input
-from textual.widgets.tree import TreeNode
-from textual import events
-from textual.timer import Timer
+try:
+    from dotenv import load_dotenv
+    from textual.app import App, ComposeResult
+    from textual.binding import Binding
+    from textual.containers import Vertical
+    from textual.widgets import Header, Tree, Static, TabbedContent, TabPane, DataTable, DirectoryTree, Input
+    from textual.widgets.tree import TreeNode
+    from textual import events
+    from textual.timer import Timer
+except ImportError as e:
+    print(f"ERROR: Missing dependency: {e}. Run: pip install -r requirements.txt", file=sys.stderr)
+    sys.exit(1)
 
 from knx_project_utils import (
     load_or_parse_project, 
@@ -88,7 +93,7 @@ class KNXLens(App, KNXTuiLogic):
         self.selected_gas: Set[str] = set()
         self.regex_filter: Optional[re.Pattern] = None
         self.regex_filter_string: str = ""
-        self.named_filter_path: Path = Path(".") / "named_filters.yaml"
+        self.named_filter_path: Path = Path(config['named_filters_path']) if config.get('named_filters_path') else Path(__file__).parent / "named_filters.yaml"
         self.named_filters: Dict[str, List[str]] = {}
         self.named_filters_rules: Dict[str, Dict[str, Any]] = {}
         self.active_named_filters: Set[str] = set()
@@ -190,8 +195,6 @@ class KNXLens(App, KNXTuiLogic):
         
         try:
             self.project_data = load_or_parse_project(self.config['knxproj_path'], self.config['password'])
-            knxproj_dir = Path(self.config['knxproj_path']).parent
-            self.named_filter_path = knxproj_dir / "named_filters.yaml"
             
             self.ga_tree_data = build_ga_tree_data(self.project_data)
             self.pa_tree_data = build_pa_tree_data(self.project_data)
@@ -358,7 +361,10 @@ class KNXLens(App, KNXTuiLogic):
         self._reset_user_activity() 
         event.stop()
         file_path = str(event.path)
-        if file_path.lower().endswith((".log", ".zip", ".txt")):
+        if file_path.lower().endswith(".knxproj"):
+            self.notify(f"Loading project: {os.path.basename(file_path)}")
+            self._load_project_file(file_path)
+        elif file_path.lower().endswith((".log", ".zip", ".txt")):
             self.notify(f"Loading file: {os.path.basename(file_path)}")
             self.config['log_file'] = file_path
             self._reload_log_file_sync()
@@ -490,13 +496,16 @@ class KNXLens(App, KNXTuiLogic):
             node = tree.cursor_node
             if node and node.data and not node.data.is_dir():
                 file_path = str(node.data.path)
-                if file_path.lower().endswith((".log", ".zip", ".txt")):
+                if file_path.lower().endswith(".knxproj"):
+                    self.notify(f"Loading project: {os.path.basename(file_path)}")
+                    self._load_project_file(file_path)
+                elif file_path.lower().endswith((".log", ".zip", ".txt")):
                     self.notify(f"Loading file: {os.path.basename(file_path)}")
                     self.config['log_file'] = file_path
                     self._reload_log_file_sync()
                     self.query_one(TabbedContent).active = "log_pane"
                 else:
-                    self.notify("Only .log, .zip, or .txt files can be loaded.", severity="warning")
+                    self.notify("Only .log, .zip, .txt or .knxproj files can be loaded.", severity="warning")
             elif node and node.data and node.data.is_dir(): pass
             else: self.notify("No file selected.", severity="warning")
         except Exception as e:
@@ -772,7 +781,8 @@ def main():
             'password': args.password or os.getenv('KNX_PASSWORD'),
             'log_path': os.getenv('LOG_PATH'),
             'max_log_lines': os.getenv('MAX_LOG_LINES', '10000'),
-            'reload_interval': os.getenv('RELOAD_INTERVAL', '5.0')
+            'reload_interval': os.getenv('RELOAD_INTERVAL', '5.0'),
+            'named_filters_path': os.getenv('NAMED_FILTERS_PATH'),
         }
         if not config['knxproj_path']:
             print("ERROR: Project path not found.", file=sys.stderr)
