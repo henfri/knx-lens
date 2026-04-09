@@ -281,9 +281,6 @@ async def start_logger_mode():
 
     xknx = XKNX(connection_config=connection_config, daemon_mode=True)
     
-    if knx_project:
-        xknx.knxproj = knx_project
-        
     if knx_project is not None:
         dpt_dict = {
             ga: data["dpt"]
@@ -343,3 +340,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
